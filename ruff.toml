@@ -1,0 +1,27 @@
+line-length = 120
+
+[lint]
+select = [
+    "E",  # pycodestyle
+    "F",  # Pyflakes
+    "UP", # pyupgrade
+    "B",  # flake8-bugbear
+    "C",  # mccabe complexity
+    # "SIM", # flake8-simplify
+    "I", # isort
+]
+ignore = [
+    'E741', # Checks for ambiguous variable names (often frustrating inside comprehensions)
+    'N802', # Checks for functions names that do not follow the snake_case naming convention
+    'N806', # Checks for the use of non-lowercase variable names in functions
+]
+
+[lint.flake8-quotes]
+inline-quotes = "single"
+
+[format]
+quote-style = "single"
+# Useful to avoid over splitting lines but conflicts with:
+# [lint.isort]
+# split-on-trailing-comma = true
+skip-magic-trailing-comma = false
