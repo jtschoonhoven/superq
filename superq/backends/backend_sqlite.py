@@ -218,7 +218,7 @@ class SqliteBackend(backend_base.BaseBackend):
         with_kwargs = with_kwargs or {}
         scheduled_after = now - fn.timeout
 
-        sql = 'SELECT COUNT(*) FROM tasks WHERE fn_name = ? AND fn_module = ? AND status = ? AND scheduled_for > ?'
+        sql = 'SELECT COUNT(*) FROM tasks WHERE fn_name = ? AND fn_module = ? AND status = ? AND started_at > ?'
         params = [fn.fn_name, fn.fn_module, 'RUNNING', scheduled_after]
 
         for key, value in with_kwargs.items():

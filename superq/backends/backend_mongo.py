@@ -202,7 +202,7 @@ class MongoBackend(backend_base.BaseBackend):
             'fn_module': fn.fn_module,
             'fn_name': fn.fn_name,
             'status': 'RUNNING',
-            'scheduled_for': {'$gt': now - fn.timeout},  # Exclude tasks that have expired
+            'started_at': {'$gt': now - fn.timeout},  # Exclude tasks that have expired
         }
         for key, value in with_kwargs.items():
             query[f'kwargs.{key}'] = value
