@@ -49,7 +49,7 @@ class WrappedFn(Generic[WrappedFnArgsType, WrappedFnReturnType]):  # type: ignor
     retries_for_timeout: int
     retries_for_concurrency: int
     concurrency_limit: int | None
-    concurrency_kwargs: tuple[str] | None
+    concurrency_kwargs: tuple[str, ...] | None
     concurrency_kwargs_limit: int | None
     worker_type: 'executor_base.ChildWorkerType'
 
@@ -125,6 +125,17 @@ class WrappedFn(Generic[WrappedFnArgsType, WrappedFnReturnType]):  # type: ignor
         if self.cfg.task_run_sync:
             result_bytes = task.run(worker_name=None, worker_host=None, run_sync=True).result_bytes
         return WrappedFnResult(_task=task, _bytes=result_bytes)
+
+    def on_success(self) -> Callable[['callbacks.FnCallbackFn'], 'callbacks.FnCallbackFn']:
+        """
+        Register a callback function that runs when this task succeeds.
+        """
+
+        def decorator(fn: 'callbacks.FnCallbackFn') -> 'callbacks.FnCallbackFn':
+            self.cb.fn[self.path]['on_success'] = callbacks.safe_cb(fn)
+            return fn
+
+        return decorator
 
     def on_failure(self) -> Callable[['callbacks.FnCallbackFn'], 'callbacks.FnCallbackFn']:
         """

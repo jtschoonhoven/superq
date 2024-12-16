@@ -1,6 +1,5 @@
 import logging
 import random
-from dataclasses import dataclass, field
 from datetime import timedelta
 from typing import ClassVar, TypeVar
 
@@ -12,21 +11,52 @@ TaskExecutorProcessPoolType = TypeVar('TaskExecutorProcessPoolType', bound='Task
 log = logging.getLogger(__name__)
 
 
-@dataclass(slots=True)
-class TaskExecutorProcessPool(executor_base.BaseTaskExecutor):  # type: ignore [misc]
+class TaskExecutorProcessPool(executor_base.BaseTaskExecutor):
     """
     A higher-level task executor that manages a pool of child process executors.
     """
 
+    EXECUTOR: ClassVar[type['executor_process.ProcessTaskExecutor']] = executor_process.ProcessTaskExecutor  # type: ignore [type-abstract]
     TYPE: ClassVar[executor_base.ChildWorkerType] = 'process'
 
-    TaskExecutor: ClassVar[type['executor_process.ProcessTaskExecutor']] = executor_process.ProcessTaskExecutor
-
     max_processes: int
-    idle_process_ttl: timedelta
+    max_tasks: int
     tasks_per_restart: int
+    idle_process_ttl: timedelta
     callbacks: 'callbacks.CallbackRegistry'
-    procs: list['executor_process.ProcessTaskExecutor'] = field(init=False, default_factory=list)
+    worker_name: str | None
+    worker_host: str | None
+    procs: list['executor_process.ProcessTaskExecutor']
+
+    __slots__ = (
+        'max_processes',
+        'max_tasks',
+        'tasks_per_restart',
+        'idle_process_ttl',
+        'callbacks',
+        'worker_name',
+        'worker_host',
+        'procs',
+    )
+
+    def __init__(
+        self,
+        max_processes: int,
+        max_tasks: int,
+        tasks_per_restart: int,
+        idle_process_ttl: timedelta,
+        callbacks: 'callbacks.CallbackRegistry',  # type: ignore [name-defined]
+        worker_name: str | None = None,
+        worker_host: str | None = None,
+    ) -> None:
+        self.procs = []
+        self.max_processes = max_processes
+        self.max_tasks = max_tasks
+        self.tasks_per_restart = tasks_per_restart
+        self.callbacks = callbacks
+        self.idle_process_ttl = idle_process_ttl
+        self.worker_name = worker_name
+        self.worker_host = worker_host
 
     @property
     def max_tasks_per_process(self) -> int:
@@ -40,10 +70,10 @@ class TaskExecutorProcessPool(executor_base.BaseTaskExecutor):  # type: ignore [
         capacity = 0
         for i in range(self.max_processes):
             if i < len(self.procs):
-                capacity += self.procs[i].capacity
+                capacity += max(self.procs[i].capacity, 0)
             else:
-                capacity += self.max_tasks_per_process
-        return max(capacity, 0)
+                capacity += max(self.max_tasks_per_process, 0)
+        return capacity
 
     @property
     def active(self) -> int:
@@ -59,11 +89,13 @@ class TaskExecutorProcessPool(executor_base.BaseTaskExecutor):  # type: ignore [
         """
         # Start the first child process if none yet exist
         if not self.procs:
-            executor = self.TaskExecutor(
-                max_tasks=self.max_tasks_per_process,
+            executor = self.EXECUTOR(
+                max_concurrency=self.max_tasks_per_process,
                 tasks_per_restart=self.tasks_per_restart,
-                idle_process_ttl=self.idle_process_ttl,
+                idle_ttl=self.idle_process_ttl,
                 callbacks=self.callbacks,
+                worker_name=self.worker_name,
+                worker_host=self.worker_host,
             )
             self.procs.append(executor)
             executor.submit_task(task)
@@ -77,11 +109,13 @@ class TaskExecutorProcessPool(executor_base.BaseTaskExecutor):  # type: ignore [
 
         # Create a new child processor if there's room and all others are active
         if len(self.procs) < self.max_processes:
-            executor = self.TaskExecutor(
-                max_tasks=self.max_tasks_per_process,
+            executor = self.EXECUTOR(
+                max_concurrency=self.max_tasks_per_process,
                 tasks_per_restart=self.tasks_per_restart,
-                idle_process_ttl=self.idle_process_ttl,
+                idle_ttl=self.idle_process_ttl,
                 callbacks=self.callbacks,
+                worker_name=self.worker_name,
+                worker_host=self.worker_host,
             )
             self.procs.append(executor)
             executor.submit_task(task)
@@ -114,21 +148,19 @@ class TaskExecutorProcessPool(executor_base.BaseTaskExecutor):  # type: ignore [
             proc.kill(graceful=graceful)
 
 
-@dataclass(slots=True)
 class EventLoopTaskExecutorProcessPool(TaskExecutorProcessPool):  # type: ignore [misc]
     """
     A higher-level task executor that manages a process pool of child event loop executors.
     """
 
     TYPE = 'asyncio'
-    TaskExecutor = executor_asyncio.AsyncioTaskExecutor
+    EXECUTOR = executor_asyncio.AsyncioTaskExecutor
 
 
-@dataclass(slots=True)
 class ThreadTaskExecutorProcessPool(TaskExecutorProcessPool):  # type: ignore [misc]
     """
     A higher-level task executor that manages a process pool of child thread executors.
     """
 
     TYPE = 'thread'
-    TaskExecutor = executor_thread.ThreadTaskExecutor
+    EXECUTOR = executor_thread.ThreadTaskExecutor

@@ -1,13 +1,15 @@
 import json
+import logging
 import os
 import pickle
 import sqlite3
 import tempfile
+import threading
 import uuid
 from collections.abc import Iterator
 from contextlib import contextmanager
 from datetime import datetime
-from typing import Any, Optional
+from typing import Any, ClassVar, Optional, Union
 
 from superq import tasks, wrapped_fn
 from superq.backends import backend_base
@@ -16,26 +18,22 @@ from superq.config import Config
 from superq.exceptions import TaskNotFoundError
 from superq.executors import executor_base
 
-DEFAULT_SQLITE_PATH = os.path.join(tempfile.gettempdir(), 'tasks.sqlite')
+log = logging.getLogger(__name__)
 
 
 class SqliteBackend(backend_base.BaseBackend):
-    conn: sqlite3.Connection
+    DEFAULT_PATH: ClassVar[str] = os.path.join(tempfile.gettempdir(), 'tasks.sqlite')
+
     cfg: 'Config'
     TaskCls: type['tasks.Task']
+    _connections: threading.local
 
-    __slots__ = ('conn', 'cfg', 'TaskCls')
+    __slots__ = ('cfg', 'TaskCls', '_connections')
 
-    def __init__(
-        self,
-        cfg: 'Config',
-        TaskCls: type['tasks.Task'],
-        conn: sqlite3.Connection | None = None,
-    ) -> None:
+    def __init__(self, cfg: 'Config', TaskCls: type['tasks.Task']) -> None:
         self.cfg = cfg
         self.TaskCls = TaskCls
-        self.conn = conn or sqlite3.connect(self.cfg.backend_sqlite_path or DEFAULT_SQLITE_PATH)
-        self.conn.row_factory = self._row_factory
+        self._connections = threading.local()
         self.conn.execute(
             """
             CREATE TABLE IF NOT EXISTS tasks (
@@ -45,7 +43,7 @@ class SqliteBackend(backend_base.BaseBackend):
                 priority INTEGER NOT NULL,
                 queue_name TEXT NOT NULL,
                 status TEXT NOT NULL,
-                result_bytes: BLOB,
+                result_bytes BLOB,
                 error TEXT NOT NULL,
                 error_type TEXT,
                 num_tries INTEGER NOT NULL,
@@ -53,8 +51,8 @@ class SqliteBackend(backend_base.BaseBackend):
                 num_timeouts INTEGER NOT NULL,
                 num_lockouts INTEGER NOT NULL,
                 num_ratelimits INTEGER NOT NULL,
-                args TEXT NOT NULL,
-                kwargs TEXT NOT NULL,
+                args TEXT,
+                kwargs TEXT,
                 created_at TEXT NOT NULL,
                 updated_at TEXT NOT NULL,
                 started_at TEXT,
@@ -63,6 +61,7 @@ class SqliteBackend(backend_base.BaseBackend):
                 worker_type TEXT,
                 worker_host TEXT,
                 worker_name TEXT,
+                api_version TEXT,
                 __transaction_id__ TEXT,
                 __prev_status__ TEXT,
                 __pickled_arg_indices__ TEXT,
@@ -318,10 +317,11 @@ class SqliteBackend(backend_base.BaseBackend):
 
     @classmethod
     def serialize_task(
-        cls, task: 'tasks.Task'
+        cls,
+        task: 'tasks.Task',
     ) -> dict[
         str,
-        'backend_base.ScalarType' | tuple['backend_base.ScalarType', ...] | dict[str, 'backend_base.ScalarType'],
+        Union['backend_base.ScalarType', tuple['backend_base.ScalarType', ...], dict[str, 'backend_base.ScalarType']],
     ]:
         """
         Serialize a Task instance into a flat dict of sqlite-compatible scalar values.
@@ -380,6 +380,16 @@ class SqliteBackend(backend_base.BaseBackend):
             '__pickled_arg_indices__': json.dumps(pickled_arg_indices),
             '__pickled_kwarg_keys__': json.dumps(pickled_kwarg_keys),
         }
+
+    @property
+    def conn(self) -> sqlite3.Connection:
+        """
+        Return a sqlite3 connection that is specific to this thread.
+        """
+        if not hasattr(self._connections, 'conn'):
+            self._connections.conn = sqlite3.connect(self.cfg.backend_sqlite_path or self.DEFAULT_PATH)
+            self.conn.row_factory = self._row_factory
+        return self._connections.conn  # type: ignore [no-any-return]
 
     @contextmanager
     def _cursor(self, transaction=False) -> Iterator[sqlite3.Cursor]:

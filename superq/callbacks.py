@@ -10,10 +10,10 @@ WorkerCallbackFn = Callable[['workers.Worker'], None]
 ChildCallback = Literal['on_child_logconfig']
 ChildCallbackFn = Callable[[str | None], None]  # Receives the name of the child process or thread (if set)
 
-TaskCallback = Literal['on_task_failure', 'on_task_retry']
+TaskCallback = Literal['on_task_success', 'on_task_failure', 'on_task_retry']
 TaskCallbackFn = Callable[['tasks.Task'], None]
 
-FnCallback = Literal['on_failure']
+FnCallback = Literal['on_success', 'on_failure']
 FnCallbackFn = Callable[['tasks.Task'], None]
 
 Cb = TypeVar('Cb', bound=Union[FnCallbackFn, TaskCallbackFn, ChildCallbackFn, WorkerCallbackFn])
@@ -42,7 +42,25 @@ class CallbackRegistry:
     __slots__ = ('worker', 'task', 'child', 'fn')
 
     def __init__(self) -> None:
-        self.worker = defaultdict(lambda: lambda _: None)
-        self.task = defaultdict(lambda: lambda _: None)
-        self.child = defaultdict(lambda: lambda _: None)
-        self.fn = defaultdict(lambda: defaultdict(lambda: lambda _: None))
+        self.worker = defaultdict(_null_cb)
+        self.task = defaultdict(_null_cb)
+        self.child = defaultdict(_null_cb)
+        self.fn = defaultdict(_null_fn_cb)
+
+
+def _null_cb() -> Callable[..., Any]:
+    """
+    No-op callback. Used as a placeholder when no other callback is set.
+    """
+
+    def cb(*args: Any, **kwargs: Any) -> None:
+        return None
+
+    return cb
+
+
+def _null_fn_cb() -> dict[FnCallback, FnCallbackFn]:
+    """
+    No-op callbacks for a wrapped function. Used as a placeholder when no other callbacks are set.
+    """
+    return defaultdict(_null_cb)

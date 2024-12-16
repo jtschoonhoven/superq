@@ -121,6 +121,7 @@ class MemoryBackend(backend_base.BaseBackend):  # type: ignore [misc]
         task = next((t for t in self.tasks if t.id == task_id), None)
         if not task:
             raise TaskNotFoundError(f'Task {task_id} not found')
+        return task
 
     async def fetch_aio(self, task_id: ObjectId) -> 'tasks.Task':  # type: ignore [name-defined]
         """

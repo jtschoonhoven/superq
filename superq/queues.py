@@ -80,7 +80,7 @@ class TaskQueue:
         retries_for_timeout: int | None = None,  # Times this task may be retried after timing out
         retries_for_concurrency: int | None = None,  # Times this task may be retried if delayed by concurrency limits
         concurrency_limit: int | None = None,  # Limit the number of concurrently-running tasks for this function
-        concurrency_kwargs: tuple[str] | str | None = None,
+        concurrency_kwargs: tuple[str, ...] | str | None = None,
         concurrency_kwargs_limit: int | None = None,
         worker_type: Optional[
             'executor_base.ChildWorkerTypeSync'
@@ -125,9 +125,11 @@ class TaskQueue:
         def decorator(  # Wraps a sync or async function and returns an instance of AsyncFn
             fn: Callable[
                 'wrapped_fn.WrappedFnArgsType',
-                'wrapped_fn.WrappedFnReturnType'
-                | Coroutine[Any, Any, 'wrapped_fn.WrappedFnReturnType']
-                | Coroutine[Any, Any, None],
+                Union[
+                    'wrapped_fn.WrappedFnReturnType',
+                    Coroutine[Any, Any, 'wrapped_fn.WrappedFnReturnType'],
+                    Coroutine[Any, Any, None],
+                ],
             ],
         ) -> 'wrapped_fn.WrappedFn[wrapped_fn.WrappedFnArgsType, wrapped_fn.WrappedFnReturnType]':
             """
@@ -201,6 +203,17 @@ class TaskQueue:
 
         def decorator(fn: 'callbacks.TaskCallbackFn') -> 'callbacks.TaskCallbackFn':
             self.cb.task['on_task_retry'] = callbacks.safe_cb(fn)
+            return fn
+
+        return decorator
+
+    def on_task_success(self) -> Callable[['callbacks.TaskCallbackFn'], 'callbacks.TaskCallbackFn']:
+        """
+        Register a callback function that runs when a task succeeds.
+        """
+
+        def decorator(fn: 'callbacks.TaskCallbackFn') -> 'callbacks.TaskCallbackFn':
+            self.cb.task['on_task_success'] = callbacks.safe_cb(fn)
             return fn
 
         return decorator

@@ -1,6 +1,5 @@
 import signal
 from abc import ABC, abstractmethod
-from dataclasses import dataclass
 from typing import ClassVar, Literal, TypeVar, Union
 
 from superq import tasks
@@ -18,7 +17,6 @@ SIG_HARD_SHUTDOWN: int = signal.SIGTERM.value  # The child process should exit a
 SIG_TIMEOUT: int = signal.SIGABRT.value  # The child process has timed out and should exit immediately
 
 
-@dataclass(slots=True)
 class BaseTaskExecutor(ABC):  # type: ignore [misc]
     """
     Abstract base class for task executors.
@@ -26,7 +24,7 @@ class BaseTaskExecutor(ABC):  # type: ignore [misc]
 
     TYPE: ClassVar[ChildWorkerType]
 
-    max_tasks: int
+    __slots__ = ()
 
     @property
     @abstractmethod

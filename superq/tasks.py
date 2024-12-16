@@ -28,7 +28,7 @@ class Task:  # type: ignore [misc]
     This should be lightweight and trivial to serialize to any backend.
     """
 
-    FN_REGISTRY: ClassVar[dict[str, 'wrapped_fn.WrappedFn']]
+    FN_REGISTRY: ClassVar[dict[str, 'wrapped_fn.WrappedFn']] = {}
 
     id: ObjectId
     fn_name: str  # Name of the function being called
@@ -152,6 +152,10 @@ class Task:  # type: ignore [misc]
         # Log success and send metrics
         execution_time_ms = int((ended_at - started_at).total_seconds() * 1000)
         log.debug(f'Executed async task `{self.fn.path}` in {execution_time_ms / 1000}s')
+
+        # Callbacks
+        self.fn.cb.fn[self.fn.path]['on_success'](self)
+        self.fn.cb.task['on_task_success'](self)
 
         return self
 
@@ -398,6 +402,12 @@ class Task:  # type: ignore [misc]
             task.save(fields=['status'])
         """
         self.fn.backend.update(self, fields=fields)
+
+    def fetch(self) -> 'Task':
+        """
+        Return a new copy of this task from the backend.
+        """
+        return self.fn.backend.fetch(self.id)
 
     @classmethod
     def _get_fn(cls, fn_name: str, fn_module: str) -> 'wrapped_fn.WrappedFn':
