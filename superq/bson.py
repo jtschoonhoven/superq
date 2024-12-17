@@ -136,6 +136,10 @@ class ObjectId:
             self.__generate()
         elif isinstance(oid, bytes) and len(oid) == 12:
             self.__id = oid
+        # MODIFICATION FOR SUPERQ: Inter-operability with bson ObjectIDs
+        elif hasattr(oid, 'binary') and isinstance(oid.binary, bytes) and len(oid.binary) == 12:
+            self.__id = oid.binary
+        # END MODIFICATION FOR SUPERQ
         else:
             self.__validate(oid)
 

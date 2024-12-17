@@ -136,3 +136,9 @@ class MemoryBackend(backend_base.BaseBackend):  # type: ignore [misc]
         self.tasks = [
             t for t in self.tasks if t.created_at >= delete_if_older_than or t.status in ('WAITING', 'RUNNING')
         ]
+
+    def delete_all_tasks(self) -> None:
+        """
+        Delete all tasks.
+        """
+        self.tasks = []

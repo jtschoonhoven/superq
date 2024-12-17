@@ -25,13 +25,15 @@ class SqliteBackend(backend_base.BaseBackend):
     DEFAULT_PATH: ClassVar[str] = os.path.join(tempfile.gettempdir(), 'tasks.sqlite')
 
     cfg: 'Config'
+    path: str
     TaskCls: type['tasks.Task']
     _connections: threading.local
 
-    __slots__ = ('cfg', 'TaskCls', '_connections')
+    __slots__ = ('cfg', 'path', 'TaskCls', 'path', '_connections')
 
-    def __init__(self, cfg: 'Config', TaskCls: type['tasks.Task']) -> None:
+    def __init__(self, cfg: 'Config', TaskCls: type['tasks.Task'], path: str | None = None) -> None:
         self.cfg = cfg
+        self.path = path or cfg.backend_sqlite_path or self.DEFAULT_PATH
         self.TaskCls = TaskCls
         self._connections = threading.local()
         self.conn.execute(
@@ -207,7 +209,9 @@ class SqliteBackend(backend_base.BaseBackend):
             cursor.execute(sql, params)
 
     def concurrency(
-        self, fn: 'wrapped_fn.WrappedFn', with_kwargs: dict[str, 'backend_base.ScalarType'] | None = None
+        self,
+        fn: 'wrapped_fn.WrappedFn',
+        with_kwargs: dict[str, 'backend_base.ScalarType'] | None = None,
     ) -> int:
         """
         Return the number of active running tasks for this function.
@@ -226,9 +230,9 @@ class SqliteBackend(backend_base.BaseBackend):
 
         with self._cursor() as cursor:
             cursor.execute(sql, params)
-            result: int = cursor.fetchone()
+            result: dict[str, int] = cursor.fetchone()
 
-        return result
+        return result['COUNT(*)']
 
     def fetch(self, task_id: ObjectId) -> 'tasks.Task':
         """
@@ -386,8 +390,8 @@ class SqliteBackend(backend_base.BaseBackend):
         """
         Return a sqlite3 connection that is specific to this thread.
         """
-        if not hasattr(self._connections, 'conn'):
-            self._connections.conn = sqlite3.connect(self.cfg.backend_sqlite_path or self.DEFAULT_PATH)
+        if not hasattr(self._connections, 'conn') or not self._connections.conn:
+            self._connections.conn = sqlite3.connect(self.path)
             self.conn.row_factory = self._row_factory
         return self._connections.conn  # type: ignore [no-any-return]
 
@@ -443,3 +447,10 @@ class SqliteBackend(backend_base.BaseBackend):
         """
         row = sqlite3.Row(*args, **kwargs)
         return dict(row)
+
+    def delete_all_tasks(self) -> None:
+        """
+        Delete all tasks.
+        """
+        with self._cursor() as cursor:
+            cursor.execute('DELETE FROM tasks')

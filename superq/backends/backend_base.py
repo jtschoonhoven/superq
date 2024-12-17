@@ -87,3 +87,10 @@ class BaseBackend(ABC):  # type: ignore [misc]
         Delete all completed tasks with a `created_at` older than the given datetime.
         """
         raise NotImplementedError()
+
+    @abstractmethod
+    def delete_all_tasks(self) -> None:
+        """
+        Delete all tasks.
+        """
+        raise NotImplementedError()

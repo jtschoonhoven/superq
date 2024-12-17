@@ -339,3 +339,9 @@ class MongoBackend(backend_base.BaseBackend):
             '__pickled_arg_indices__': pickled_arg_indices,
             '__pickled_kwarg_keys__': pickled_kwarg_keys,
         }
+
+    def delete_all_tasks(self) -> None:
+        """
+        Delete all tasks.
+        """
+        self.db.delete_many({})

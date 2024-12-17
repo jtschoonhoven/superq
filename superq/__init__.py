@@ -1,3 +1,4 @@
+from .backends import BaseBackend, MongoBackend, SqliteBackend
 from .bson import ObjectId
 from .callbacks import CallbackRegistry
 from .config import Config
@@ -16,7 +17,7 @@ from .exceptions import (
     TaskTimeoutError,
     WorkerError,
 )
-from .executors.executor_base import (
+from .executors import (
     SIG_HARD_SHUTDOWN,
     SIG_SOFT_SHUTDOWN,
     SIG_SOFT_SHUTDOWN_ALT,
@@ -24,6 +25,9 @@ from .executors.executor_base import (
     ChildWorkerType,
     ChildWorkerTypeAsync,
     ChildWorkerTypeSync,
+    EventLoopTaskExecutorProcessPool,
+    TaskExecutorProcessPool,
+    ThreadTaskExecutorProcessPool,
 )
 from .queues import TaskQueue
 from .tasks import Task, TaskFailureType, TaskStatus
@@ -35,7 +39,9 @@ __all__ = [
     'Task',
     'Config',
     'Worker',
-    'tasks.Task',
+    'BaseBackend',
+    'MongoBackend',
+    'SqliteBackend',
     'TaskStatus',
     'TaskFailureType',
     'WrappedFn',
@@ -49,6 +55,9 @@ __all__ = [
     'ChildWorkerType',
     'ChildWorkerTypeAsync',
     'ChildWorkerTypeSync',
+    'TaskExecutorProcessPool',
+    'EventLoopTaskExecutorProcessPool',
+    'ThreadTaskExecutorProcessPool',
     'SuperqError',
     'TaskImportError',
     'BackendError',

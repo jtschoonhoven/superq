@@ -19,7 +19,7 @@ backend = create_backend(SqliteBackend, cfg)
 my_fn = wrap_fn(lambda: None, backend=backend)
 
 
-@pytest.fixture(autouse=True, scope='module')
+@pytest.fixture(autouse=True, scope='session')
 def teardown() -> Iterator[None]:
     yield
     if os.path.exists(SQLITE_PATH):

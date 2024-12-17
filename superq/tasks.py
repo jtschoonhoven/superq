@@ -4,7 +4,7 @@ import logging
 import pickle
 from dataclasses import dataclass
 from datetime import datetime
-from typing import Any, ClassVar, Literal, Optional, Union
+from typing import Any, ClassVar, Literal, Optional
 
 from superq import wrapped_fn
 from superq.backends import backend_base
@@ -16,7 +16,6 @@ log = logging.getLogger(__name__)
 
 TaskStatus = Literal['WAITING', 'RUNNING', 'SUCCESS', 'FAILURE']
 TaskFailureType = Literal['ERROR', 'SIGNAL', 'TIMEOUT', 'CONCURRENCY', 'RATELIMIT']
-TaskOrIdType = Union['Task', ObjectId, str]
 
 TASK_EPOCH = datetime(2024, 1, 1).replace(microsecond=0)  # Do not change: a fixed reference point for interval tasks
 
