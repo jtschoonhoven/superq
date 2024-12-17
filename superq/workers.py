@@ -233,9 +233,7 @@ class Worker:
             # TODO: Deterministically add some jitter so we don't schedule too many tasks at once
             now = datetime.now()
             interval_seconds = int(fn.interval.total_seconds())  # Count the seconds in the interval
-            seconds_since_epoch = int(
-                (now - tasks.TASK_EPOCH).total_seconds()
-            )  # Count the seconds since the task epoch
+            seconds_since_epoch = int((now - tasks.TASK_EPOCH).total_seconds())  # Count the seconds since the epoch
             intervals_since_epoch = seconds_since_epoch // interval_seconds  # Count the intervals since the task epoch
             prev_run_at = tasks.TASK_EPOCH + timedelta(seconds=intervals_since_epoch * interval_seconds)
             next_run_at = prev_run_at + fn.interval

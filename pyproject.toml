@@ -5,6 +5,9 @@ description = "Simple, durable, asyncio-compatible task queue inspired by Celery
 authors = ["jtschoonhoven <jtschoonhoven@gmail.com>"]
 readme = "README.md"
 
+[tool.poetry.scripts]
+superq = "superq.cli:main"
+
 [tool.poetry.dependencies]
 python = ">=3.10"
 pymongo = { version = ">=3.7", optional = true }
