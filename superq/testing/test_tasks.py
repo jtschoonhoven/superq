@@ -1,8 +1,5 @@
-import os
 import uuid
-from collections.abc import Iterator
 from datetime import datetime
-from pathlib import Path
 from unittest.mock import MagicMock, call
 
 import mongomock
@@ -11,19 +8,11 @@ from pytest_mock import MockFixture
 
 from superq import BaseBackend, MongoBackend, SqliteBackend, Task, TaskQueue
 from superq.config import Config
-
-SQLITE_PATH = str(Path(__file__).parent.resolve() / 'sqlite.db')
+from superq.testing.testing_utils import SQLITE_PATH
 
 cfg = Config()
 sqlite_backend = SqliteBackend(cfg, path=SQLITE_PATH, TaskCls=Task)
 mongo_backend = MongoBackend(cfg, client=mongomock.MongoClient(), TaskCls=Task)
-
-
-@pytest.fixture(autouse=True, scope='session')
-def setup_and_teardown() -> Iterator[None]:
-    yield
-    if os.path.exists(SQLITE_PATH):
-        os.remove(SQLITE_PATH)
 
 
 @pytest.mark.parametrize('backend', [sqlite_backend, mongo_backend])

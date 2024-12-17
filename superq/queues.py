@@ -53,11 +53,11 @@ class TaskQueue:
         elif self.cfg.backend_mongo_url:
             from superq.backends.backend_mongo import MongoBackend
 
-            self.backend = MongoBackend(self.cfg, self.task_cls)
+            self.backend = MongoBackend(self.cfg)
         elif self.cfg.backend_sqlite_path:
             from superq.backends.backend_sqlite import SqliteBackend
 
-            self.backend = SqliteBackend(self.cfg, self.task_cls)
+            self.backend = SqliteBackend(self.cfg)
         else:
             raise BackendError('Backend is not configured')
 
@@ -92,7 +92,7 @@ class TaskQueue:
                 Union[
                     'wrapped_fn.WrappedFnReturnType',
                     Coroutine[Any, Any, 'wrapped_fn.WrappedFnReturnType'],
-                    Coroutine[Any, Any, None],
+                    Coroutine[Any, Any, Any],
                 ],
             ]
         ],

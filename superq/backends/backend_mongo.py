@@ -26,11 +26,11 @@ class MongoBackend(backend_base.BaseBackend):
     def __init__(
         self,
         cfg: 'Config',
-        TaskCls: type['tasks.Task'],
         client: pymongo.MongoClient | None = None,
+        TaskCls: Optional[type['tasks.Task']] = None,
     ) -> None:
         self.cfg = cfg
-        self.TaskCls = TaskCls
+        self.TaskCls = TaskCls or tasks.Task
         self._client = client or pymongo.MongoClient(self.cfg.backend_mongo_url)
         self._collection = None
 

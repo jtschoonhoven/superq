@@ -48,15 +48,19 @@ class CallbackRegistry:
         self.fn = defaultdict(_null_fn_cb)
 
 
+def _null_fn(*args: Any, **kwargs: Any) -> None:
+    """
+    No-op function. Used as a placeholder.
+    """
+    return None
+
+
 def _null_cb() -> Callable[..., Any]:
     """
     No-op callback. Used as a placeholder when no other callback is set.
     """
 
-    def cb(*args: Any, **kwargs: Any) -> None:
-        return None
-
-    return cb
+    return _null_fn
 
 
 def _null_fn_cb() -> dict[FnCallback, FnCallbackFn]:

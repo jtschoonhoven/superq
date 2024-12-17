@@ -6,7 +6,8 @@ from superq import TaskQueue, WorkerError
 
 def main() -> None:
     """
-    CLI entrypoint for the worker process.
+    CLI entrypoint for the worker process. Only argument is a dot-separated path to your TaskQueue module.
+    Usage: superq path.to.taskqueue.module
     """
     parser = argparse.ArgumentParser(description='SuperQ')
     parser.add_argument(

@@ -31,10 +31,10 @@ class SqliteBackend(backend_base.BaseBackend):
 
     __slots__ = ('cfg', 'path', 'TaskCls', 'path', '_connections')
 
-    def __init__(self, cfg: 'Config', TaskCls: type['tasks.Task'], path: str | None = None) -> None:
+    def __init__(self, cfg: 'Config', path: str | None = None, TaskCls: Optional[type['tasks.Task']] = None) -> None:
         self.cfg = cfg
         self.path = path or cfg.backend_sqlite_path or self.DEFAULT_PATH
-        self.TaskCls = TaskCls
+        self.TaskCls = TaskCls or tasks.Task
         self._connections = threading.local()
         self.conn.execute(
             """

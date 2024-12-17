@@ -2,6 +2,7 @@ import logging
 import logging.handlers
 import sys
 from datetime import datetime, timedelta
+from pathlib import Path
 from typing import Any, Callable, Literal
 
 from superq.backends.backend_base import BaseBackend
@@ -11,6 +12,8 @@ from superq.callbacks import CallbackRegistry, ChildCallbackFn
 from superq.config import Config
 from superq.tasks import Task, TaskFailureType, TaskStatus
 from superq.wrapped_fn import WrappedFn
+
+SQLITE_PATH = str(Path(__file__).parent.resolve() / 'sqlite.db')
 
 
 def setup_logging(*args: Any, **kwargs: Any) -> None:
