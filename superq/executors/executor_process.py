@@ -279,6 +279,7 @@ class ProcessTransceiver:  # type: ignore [misc]
     worker_host: str | None = None
 
     _pending_task_queue: mp.Queue = field(init=False, default_factory=mp.Queue)
+    _num_tasks_pending: Synchronized = field(init=False, default_factory=lambda: mp.Value('i', 0))
     _num_tasks_executing: Synchronized = field(init=False, default_factory=lambda: mp.Value('i', 0))
     _num_tasks_completed: Synchronized = field(init=False, default_factory=lambda: mp.Value('i', 0))
     _num_tasks_til_restart: Synchronized = field(init=False, default_factory=lambda: mp.Value('i', 1))
@@ -295,6 +296,9 @@ class ProcessTransceiver:  # type: ignore [misc]
         """
         Submit a task to the pending queue.
         """
+        # NOTE: `_pending_task_queue.qsize()` is broken on MacOSX so we use `_num_tasks_pending` instead
+        with self._num_tasks_pending.get_lock():
+            self._num_tasks_pending.value += 1
         self._pending_task_queue.put(task)
 
     def pop_task(self, task_registry: 'ProcessTaskRegistry') -> Optional['tasks.Task']:
@@ -306,6 +310,8 @@ class ProcessTransceiver:  # type: ignore [misc]
 
         task: tasks.Task = self._pending_task_queue.get_nowait()  # type: ignore [no-any-return]
         task_registry.add(task, expires_at=datetime.now() + task.fn.timeout)
+        with self._num_tasks_pending.get_lock():
+            self._num_tasks_pending.value -= 1
         with self._num_tasks_executing.get_lock():
             self._num_tasks_executing.value += 1  # Assume the task will be executed immediately
 
@@ -358,7 +364,7 @@ class ProcessTransceiver:  # type: ignore [misc]
         """
         Number of pending + currently-executing tasks.
         """
-        return self._num_tasks_executing.value + self._pending_task_queue.qsize()  # type: ignore [no-any-return]
+        return self._num_tasks_executing.value + self._num_tasks_pending.value  # type: ignore [no-any-return]
 
     @property
     def is_shutting_down(self) -> bool:

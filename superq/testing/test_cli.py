@@ -1,6 +1,8 @@
+import logging
 import subprocess
+import sys
 
-from superq import SIG_SOFT_SHUTDOWN, Config, SqliteBackend, TaskQueue
+from superq import SIG_SOFT_SHUTDOWN, Config, SqliteBackend, TaskQueue, Worker
 from superq.testing.testing_utils import SQLITE_PATH
 
 cfg = Config()
@@ -22,9 +24,23 @@ async def asyncio_task() -> str:
     return 'ok'
 
 
+@q.on_worker_logconfig()
+def on_worker_logconfig(worker: Worker) -> None:
+    logging.basicConfig(level=logging.DEBUG, stream=sys.stdout)
+
+
+@q.on_child_logconfig()
+def on_child_logconfig(name: str | None) -> None:
+    logging.basicConfig(level=logging.DEBUG, stream=sys.stdout)
+
+
 def test_cli() -> None:
     # Start the worker in a child process
-    worker = subprocess.Popen(['poetry', 'run', 'superq', 'superq.testing.test_cli'])
+    worker = subprocess.Popen(
+        ['poetry', 'run', 'superq', 'superq.testing.test_cli'],
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+    )
 
     # Schedule three tasks, one for each executor type
     process_result = process_task()
@@ -38,4 +54,9 @@ def test_cli() -> None:
 
     # Stop the worker
     worker.send_signal(SIG_SOFT_SHUTDOWN)
-    worker.wait()
+    stdout, stderr = worker.communicate()  # Blocks until process exits
+
+    # Confirm we captured logs as expected
+    assert stderr == b''
+    assert b'superq.workers:Worker starting' in stdout
+    assert b'superq.tasks:Executed async task' in stdout

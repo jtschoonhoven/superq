@@ -1,5 +1,6 @@
 import logging
 from collections import defaultdict
+from functools import partial
 from typing import Any, Callable, Literal, TypeVar, Union
 
 from superq import tasks, workers
@@ -22,15 +23,16 @@ log = logging.getLogger(__name__)
 
 
 def safe_cb(cb: Cb) -> Cb:
-    def with_try_catch(*args: Any, **kwargs: Any) -> None:
-        try:
-            cb(*args, **kwargs)
-        except Exception as e:
-            log.exception(f'Unhandled exception in callback {cb.__name__}: {e}')
-
-    with_try_catch.__name__ = cb.__name__
-
+    with_try_catch = partial(_with_try_catch, cb)
+    with_try_catch.__name__ = cb.__name__  # type: ignore[attr-defined]
     return with_try_catch  # type: ignore[return-value]
+
+
+def _with_try_catch(cb: Cb, *args: Any, **kwargs: Any) -> None:
+    try:
+        cb(*args, **kwargs)
+    except Exception as e:
+        log.exception(f'Unhandled exception in callback {cb.__name__}: {e}')
 
 
 class CallbackRegistry:

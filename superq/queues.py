@@ -200,75 +200,67 @@ class TaskQueue:
         """
         Register a callback function that runs when a task does not succeed and is rescheduled.
         """
-
-        def decorator(fn: 'callbacks.TaskCallbackFn') -> 'callbacks.TaskCallbackFn':
-            self.cb.task['on_task_retry'] = callbacks.safe_cb(fn)
-            return fn
-
-        return decorator
+        return functools.partial(_task_callback_decorator, self.cb, 'on_task_retry')
 
     def on_task_success(self) -> Callable[['callbacks.TaskCallbackFn'], 'callbacks.TaskCallbackFn']:
         """
         Register a callback function that runs when a task succeeds.
         """
-
-        def decorator(fn: 'callbacks.TaskCallbackFn') -> 'callbacks.TaskCallbackFn':
-            self.cb.task['on_task_success'] = callbacks.safe_cb(fn)
-            return fn
-
-        return decorator
+        return functools.partial(_task_callback_decorator, self.cb, 'on_task_success')
 
     def on_task_failure(self) -> Callable[['callbacks.TaskCallbackFn'], 'callbacks.TaskCallbackFn']:
         """
         Register a callback function that runs when a task fails and is not rescheduled.
         """
-
-        def decorator(fn: 'callbacks.TaskCallbackFn') -> 'callbacks.TaskCallbackFn':
-            self.cb.task['on_task_failure'] = callbacks.safe_cb(fn)
-            return fn
-
-        return decorator
+        return functools.partial(_task_callback_decorator, self.cb, 'on_task_failure')
 
     def on_worker_logconfig(self) -> Callable[['callbacks.WorkerCallbackFn'], 'callbacks.WorkerCallbackFn']:
         """
         Register a callback function that runs when the worker configures logging.
         """
-
-        def decorator(fn: 'callbacks.WorkerCallbackFn') -> 'callbacks.WorkerCallbackFn':
-            self.cb.worker['on_worker_logconfig'] = callbacks.safe_cb(fn)
-            return fn
-
-        return decorator
+        return functools.partial(_worker_callback_decorator, self.cb, 'on_worker_logconfig')
 
     def on_worker_start(self) -> Callable[['callbacks.WorkerCallbackFn'], 'callbacks.WorkerCallbackFn']:
         """
         Register a callback function that runs when the worker server starts.
         """
-
-        def decorator(fn: 'callbacks.WorkerCallbackFn') -> 'callbacks.WorkerCallbackFn':
-            self.cb.worker['on_worker_start'] = callbacks.safe_cb(fn)
-            return fn
-
-        return decorator
+        return functools.partial(_worker_callback_decorator, self.cb, 'on_worker_start')
 
     def on_worker_shutdown(self) -> Callable[['callbacks.WorkerCallbackFn'], 'callbacks.WorkerCallbackFn']:
         """
         Register a callback function that runs when the worker begins shutdown.
         """
-
-        def decorator(fn: 'callbacks.WorkerCallbackFn') -> 'callbacks.WorkerCallbackFn':
-            self.cb.worker['on_worker_shutdown'] = callbacks.safe_cb(fn)
-            return fn
-
-        return decorator
+        return functools.partial(_worker_callback_decorator, self.cb, 'on_worker_shutdown')
 
     def on_child_logconfig(self) -> Callable[['callbacks.ChildCallbackFn'], 'callbacks.ChildCallbackFn']:
         """
         Register a callback function that runs when a new child process or thread configures logging.
         """
+        return functools.partial(_child_callback_decorator, self.cb, 'on_child_logconfig')
 
-        def decorator(fn: 'callbacks.ChildCallbackFn') -> 'callbacks.ChildCallbackFn':
-            self.cb.child['on_child_logconfig'] = callbacks.safe_cb(fn)
-            return fn
 
-        return decorator
+def _child_callback_decorator(
+    cb_registry: 'callbacks.CallbackRegistry',
+    cb: 'callbacks.ChildCallback',
+    fn: 'callbacks.ChildCallbackFn',
+) -> 'callbacks.ChildCallbackFn':
+    cb_registry.child[cb] = callbacks.safe_cb(fn)
+    return fn
+
+
+def _worker_callback_decorator(
+    cb_registry: 'callbacks.CallbackRegistry',
+    cb: 'callbacks.WorkerCallback',
+    fn: 'callbacks.WorkerCallbackFn',
+) -> 'callbacks.WorkerCallbackFn':
+    cb_registry.worker[cb] = callbacks.safe_cb(fn)
+    return fn
+
+
+def _task_callback_decorator(
+    cb_registry: 'callbacks.CallbackRegistry',
+    cb: 'callbacks.TaskCallback',
+    fn: 'callbacks.TaskCallbackFn',
+) -> 'callbacks.TaskCallbackFn':
+    cb_registry.task[cb] = callbacks.safe_cb(fn)
+    return fn
