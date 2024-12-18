@@ -2,6 +2,8 @@ import os
 from dataclasses import dataclass, field
 from datetime import timedelta
 
+from typing_extensions import Literal
+
 from superq.executors import executor_base
 
 
@@ -39,6 +41,8 @@ class Config:  # type: ignore [misc]
     task_retries_for_concurrency: int = -1
     # Force tasks to run synchronously, bypassing the async worker entirely (useful for testing and debugging)
     task_run_sync: bool = False
+    # Log level to use for the worker process
+    worker_log_level: Literal['', 'DEBUG', 'INFO', 'WARNING', 'ERROR', 'CRITICAL'] = ''
     # Whether to use processes or threads (this can also be set per-task)
     worker_default_type: 'executor_base.ChildWorkerTypeSync' = 'process'
     # Time to keep idle worker processes alive and ready to accept new tasks

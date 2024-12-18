@@ -14,7 +14,7 @@ from multiprocessing.sharedctypes import Synchronized
 from multiprocessing.synchronize import Event, Lock
 from typing import Any, ClassVar, Literal, NamedTuple, Optional, TypeVar
 
-from superq import callbacks, tasks
+from superq import callbacks, config, tasks
 from superq.bson import ObjectId
 from superq.executors import executor_base
 
@@ -32,18 +32,20 @@ class ProcessTaskExecutor(executor_base.BaseTaskExecutor):
     proc: mp.Process | None
     info: 'ProcessTransceiver'
 
-    __slots__ = ('proc', 'info')
+    __slots__ = ('proc', 'info', 'cfg')
 
     def __init__(
         self,
+        cfg: 'config.Config',
         max_concurrency: int,
         tasks_per_restart: int,
         idle_ttl: timedelta,
-        callbacks: 'callbacks.CallbackRegistry',
+        callbacks: dict['callbacks.ChildCallback', 'callbacks.ChildCallbackFn'],
         worker_name: str | None = None,
         worker_host: str | None = None,
     ) -> None:
         self.proc = None
+        self.cfg = cfg
         self.info = ProcessTransceiver(
             idle_ttl=idle_ttl,
             max_concurrency=max_concurrency,
@@ -58,22 +60,43 @@ class ProcessTaskExecutor(executor_base.BaseTaskExecutor):
         Submit a new task for execution. The caller is responsible for first checking `capacity`.
         """
         if self.info.is_shutting_down:
-            log.warning(f'Worker submitted task {task.id} to a {self.TYPE} that is shutting down')
+            log.warning(f'Submitted task {task.fn.path} ({task.id}) to {self.TYPE} process that is shutting down')
 
         self.info.submit_task(task)
+
         if not self.proc or not self.proc.is_alive():  # Start a new process if necessary
+            log.debug(f'Launching a new {self.TYPE} child process for task {task.fn.path} ({task.id})')
             self.info.is_shutting_down = False
-            self.proc = mp.Process(target=self.run, args=(self.info,))
+            self.proc = mp.Process(target=self.run, args=(self.info, self.cfg))
             self.proc.start()
         return self
 
     @property
+    def alive(self) -> bool:
+        """
+        Return True if the child process is alive.
+        """
+        return bool(self.proc and self.proc.is_alive())
+
+    @property
     def capacity(self) -> int:
+        """
+        Return the number of additional tasks that may be submitted to this process.
+        """
         return self.info.capacity
 
     @property
     def active(self) -> int:
+        """
+        Return the number of tasks currently executing in this process.
+        """
         return self.info.active
+
+    @staticmethod
+    def init_logging(info: 'ProcessTransceiver', cfg: 'config.Config') -> None:
+        if cfg.worker_log_level:
+            logging.getLogger('superq').setLevel(cfg.worker_log_level)
+        info.callbacks['on_child_logconfig'](info.worker_name)
 
     def kill(self, graceful: bool) -> None:
         """
@@ -81,9 +104,13 @@ class ProcessTaskExecutor(executor_base.BaseTaskExecutor):
         """
         if self.proc and self.proc.pid and self.proc.is_alive():
             if graceful:
+                log.debug(f'Gracefully shutting down {self.TYPE} executor with pid {self.proc.pid}')
                 os.kill(self.proc.pid, executor_base.SIG_SOFT_SHUTDOWN)
             else:
+                log.debug(f'Forcefully shutting down {self.TYPE} executor with pid {self.proc.pid}')
                 os.kill(self.proc.pid, executor_base.SIG_HARD_SHUTDOWN)
+        else:
+            log.debug(f'Ignoring shutdown request for {self.TYPE} executor: no active process')
 
     @staticmethod
     def exit(task_registry: 'ProcessTaskRegistry', exit_code: Literal[0, 1], immediate=False) -> None:
@@ -93,6 +120,7 @@ class ProcessTaskExecutor(executor_base.BaseTaskExecutor):
         now = datetime.now()
 
         if immediate:
+            log.debug('Forcing immediate shutdown of task executor')
             sys.exit(exit_code)
 
         # Fail and conditionally reschedule all tasks
@@ -102,14 +130,18 @@ class ProcessTaskExecutor(executor_base.BaseTaskExecutor):
             error = f'Task {task.id} timed out' if is_timeout else f'Task {task.id} received shutdown signal'
 
             if is_timeout and task.can_retry_for_timeout:
+                log.debug(f'Rescheduling task {task.fn.path} ({task.id}) for timeout: executor is shutting down')
                 task.reschedule(error, error_type, incr_num_timeouts=True, run_sync=False)
             elif task.can_retry_for_signal:
+                log.debug(f'Rescheduling task {task.fn.path} ({task.id}) for signal: executor is shutting down')
                 task.reschedule(error, error_type, incr_num_recovers=True, run_sync=False)
             else:
+                log.debug(f'Failing task {task.fn.path} ({task.id}) for signal: executor is shutting down')
                 task.set_failed(error, error_type, incr_num_recovers=True)
                 task.fn.cb.fn[task.fn.path]['on_failure'](task)
                 task.fn.cb.task['on_task_failure'](task)
 
+        log.debug(f'Task executor exiting with code {exit_code} after graceful shutdown')
         sys.exit(exit_code)
 
     def timeout(self) -> None:
@@ -118,7 +150,10 @@ class ProcessTaskExecutor(executor_base.BaseTaskExecutor):
         """
         self.info.is_shutting_down = True
         if self.proc and self.proc.is_alive() and self.proc.pid:
+            log.debug(f'Killing {self.TYPE} executor process {self.proc.pid} for timeout')
             os.kill(self.proc.pid, executor_base.SIG_TIMEOUT)
+        else:
+            log.debug(f'Shutting down inactive {self.TYPE} executor process for timeout')
 
     @classmethod
     def register_signal_handlers(cls, task_registry: 'ProcessTaskRegistry', info: 'ProcessTransceiver') -> None:
@@ -156,35 +191,42 @@ class ProcessTaskExecutor(executor_base.BaseTaskExecutor):
         signal.signal(executor_base.SIG_HARD_SHUTDOWN, force_shutdown)
 
     @classmethod
-    def run(cls, info: 'ProcessTransceiver') -> None:
+    def run(cls, info: 'ProcessTransceiver', cfg: 'config.Config') -> None:
         """
         Run tasks in this child process continuously until shutdown.
         """
-        info.callbacks.child['on_child_logconfig'](info.worker_name)
         task_registry = ProcessTaskRegistry()
         cls.register_signal_handlers(task_registry, info)
+        cls.init_logging(info, cfg)
         info.set_started()
 
         def monitor_timeout(task: tasks.Task) -> None:
             """Automatically kill this process if the task times out."""
             time.sleep(task.fn.timeout.total_seconds())
             if task_registry.get(task.id):
-                os.kill(os.getpid(), executor_base.SIG_TIMEOUT)
+                pid = os.getpid()
+                log.warning(f'Task {task.fn.path} ({task.id}) timed out in process executor: killing process {pid}')
+                os.kill(pid, executor_base.SIG_TIMEOUT)
 
         while True:
             task = info.pop_task(task_registry)
 
             if task:
+                log.debug(f'Starting task {task.fn.path} ({task.id}) in process executor')
                 threading.Thread(target=functools.partial(monitor_timeout, task), daemon=True).start()
                 try:
                     task.run(worker_name=info.worker_name, worker_host=info.worker_host, run_sync=False)
                 finally:
                     info.on_task_complete(task, task_registry)
+                log.debug(f'Finished task {task.fn.path} ({task.id}) in process executor')
 
             elif info.is_idle(task_registry):
                 if info.is_shutting_down or info.is_idle_ttl_expired:
+                    log.debug('Shutting down inactive process executor: idle timeout expired')
                     cls.exit(task_registry, exit_code=0)
 
+            if task:
+                continue  # Continue immediately to the next task
             time.sleep(1)
 
 
@@ -274,7 +316,7 @@ class ProcessTransceiver:  # type: ignore [misc]
     idle_ttl: timedelta
     max_concurrency: int
     tasks_per_restart: int
-    callbacks: 'callbacks.CallbackRegistry'
+    callbacks: dict['callbacks.ChildCallback', 'callbacks.ChildCallbackFn']
     worker_name: str | None = None
     worker_host: str | None = None
 
@@ -371,7 +413,7 @@ class ProcessTransceiver:  # type: ignore [misc]
         """
         True if the process is shutting down.
         """
-        return self._is_shutting_down.value  # type: ignore [no-any-return]
+        return bool(self._is_shutting_down.value)  # type: ignore [no-any-return]
 
     @is_shutting_down.setter
     def is_shutting_down(self, value: bool) -> None:

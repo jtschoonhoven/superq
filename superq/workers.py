@@ -53,27 +53,9 @@ class Worker:
         self.last_ttl_check = datetime(1970, 1, 1)
         self.task_cls = task_cls
         self.pools = {
-            'process': executor_pool.TaskExecutorProcessPool(
-                max_processes=self.cfg.worker_max_processes,
-                max_tasks=self.cfg.worker_max_processes,
-                idle_process_ttl=self.cfg.worker_idle_process_ttl,
-                tasks_per_restart=self.cfg.worker_max_process_tasks_per_restart,
-                callbacks=self.cb,
-            ),
-            'thread': executor_pool.ThreadTaskExecutorProcessPool(
-                max_processes=self.cfg.worker_max_thread_processes,
-                max_tasks=(self.cfg.worker_max_thread_processes * self.cfg.worker_max_threads_per_process),
-                idle_process_ttl=self.cfg.worker_idle_process_ttl,
-                tasks_per_restart=self.cfg.worker_max_thread_tasks_per_restart,
-                callbacks=self.cb,
-            ),
-            'asyncio': executor_pool.EventLoopTaskExecutorProcessPool(
-                max_processes=self.cfg.worker_max_event_loops,
-                max_tasks=(self.cfg.worker_max_event_loops * self.cfg.worker_max_coroutines_per_event_loop),
-                idle_process_ttl=self.cfg.worker_idle_process_ttl,
-                tasks_per_restart=self.cfg.worker_max_coroutine_tasks_per_restart,
-                callbacks=self.cb,
-            ),
+            'process': executor_pool.TaskExecutorProcessPool(cfg=self.cfg, callbacks=self.cb.child),
+            'thread': executor_pool.ThreadTaskExecutorProcessPool(cfg=self.cfg, callbacks=self.cb.child),
+            'asyncio': executor_pool.EventLoopTaskExecutorProcessPool(cfg=self.cfg, callbacks=self.cb.child),
         }
 
     def get_open_pools(self) -> list['executor_base.BaseTaskExecutor']:
@@ -81,6 +63,11 @@ class Worker:
         Return a list of all worker pools that are not at max capacity.
         """
         return [p for p in self.pools.values() if p.capacity]
+
+    def init_logging(self) -> None:
+        if self.cfg.worker_log_level:
+            logging.getLogger('superq').setLevel(self.cfg.worker_log_level)
+        self.cb.worker['on_worker_logconfig'](self)
 
     @property
     def is_shutting_down(self) -> bool:
@@ -91,12 +78,10 @@ class Worker:
         Run the main worker process in a loop forever (or until a signal is received).
         """
         self.register_signal_handlers()
+        self.init_logging()
 
         task: tasks.Task | None = None
         run_sync = self.cfg.task_run_sync if run_sync is None else run_sync
-
-        # Init logging
-        self.cb.worker['on_worker_logconfig'](self)
 
         # Log registered functions
         fns_str = '\n'.join(f'  {k}' for k in self.fn_registry.keys())
@@ -132,12 +117,14 @@ class Worker:
 
             # Delete old tasks from the DB
             if self.last_ttl_check < now - self.cfg.worker_backend_task_ttl_interval:
+                log.debug('Worker checking for completed tasks to delete')
                 self.backend.delete_completed_tasks_older_than(now - self.cfg.backend_task_ttl)
                 self.last_ttl_check = now
 
-            # Don't process new tasks if we're at max capacity
+            # Don't process new tasks if we're at max capacity (this should be rare)
             open_worker_pool_types = [p.TYPE for p in self.get_open_pools()]
             if not open_worker_pool_types:
+                log.debug(f'Worker is at max capacity across all pools: sleeping {poll_seconds}s')
                 time.sleep(poll_seconds)
                 continue
 
@@ -151,13 +138,13 @@ class Worker:
                 time.sleep(poll_seconds)
                 continue
 
-            log.debug(f'Worker submitting task {task.fn.path} ({task.id}) to {task.fn.worker_type} pool')
-
             # Submit the task to the corresponding pool
+            log.debug(f'Worker submitting task {task.fn.path} ({task.id}) to {task.fn.worker_type} pool')
             pool = self.pools[task.fn.worker_type]
             pool.submit_task(task)
 
-            # Sleep before processing the next task
+            if task:
+                continue  # Continue immediately to the next task
             time.sleep(poll_seconds)
 
         self.shutdown()
