@@ -325,7 +325,6 @@ class ProcessTransceiver:  # type: ignore [misc]
     _num_tasks_executing: Synchronized = field(init=False, default_factory=lambda: mp.Value('i', 0))
     _num_tasks_completed: Synchronized = field(init=False, default_factory=lambda: mp.Value('i', 0))
     _num_tasks_til_restart: Synchronized = field(init=False, default_factory=lambda: mp.Value('i', 1))
-    _num_seconds_idle: Synchronized = field(init=False, default_factory=lambda: mp.Value('i', 0))
     _last_task_completed_at_seconds: Synchronized = field(init=False, default_factory=lambda: mp.Value('i', 0))
     _is_shutting_down: Synchronized = field(init=False, default_factory=lambda: mp.Value('b', False))
     _started: Event = field(init=False, default_factory=mp.Event)
@@ -432,4 +431,6 @@ class ProcessTransceiver:  # type: ignore [misc]
         """
         This process is "idle" if no tasks are executing or scheduled.
         """
-        return self._num_seconds_idle.value > self.idle_ttl.total_seconds()  # type: ignore [no-any-return]
+        now = datetime.now()
+        idle_seconds = now.timestamp() - self._last_task_completed_at_seconds.value
+        return idle_seconds > self.idle_ttl.total_seconds()  # type: ignore [no-any-return]
