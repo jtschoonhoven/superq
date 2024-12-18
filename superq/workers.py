@@ -112,7 +112,6 @@ class Worker:
 
             # Schedule interval tasks
             if self.last_interval_check < now - self.cfg.worker_scheduler_interval:
-                log.debug('Worker checking for interval tasks to schedule')
                 self.schedule_interval_tasks()
                 self.last_interval_check = now
 
