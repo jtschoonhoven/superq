@@ -136,7 +136,6 @@ class Worker:
                 log.error(str(e))
 
             if not task:
-                log.debug(f'Worker has no tasks to schedule: sleeping {poll_seconds}s')
                 time.sleep(poll_seconds)
                 continue
 
