@@ -1,3 +1,7 @@
+# Install all dependencies
+install:
+	poetry install --all-extras --with dev
+
 # Automatically format and lint local python code
 fmt:
 	poetry run ruff format .
