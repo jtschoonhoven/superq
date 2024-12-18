@@ -145,7 +145,8 @@ class Worker:
             pool = self.pools[task.fn.worker_type]
             pool.submit_task(task)
 
-            # Sleep before processing the next task
+            if task:
+                continue  # Continue immediately to the next task
             time.sleep(poll_seconds)
 
         self.shutdown()
