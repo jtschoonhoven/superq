@@ -66,8 +66,9 @@ class TaskExecutorProcessPool(executor_base.BaseTaskExecutor):
         """
         capacity = 0
         for i in range(self.max_processes):
-            if i < len(self.procs):
-                capacity += max(self.procs[i].capacity, 0)
+            executor = self.procs[i] if i < len(self.procs) else None
+            if executor and executor.alive:
+                capacity += max(executor.capacity, 0)
             else:
                 capacity += max(self.max_tasks_per_process, 0)
         return capacity
@@ -97,6 +98,23 @@ class TaskExecutorProcessPool(executor_base.BaseTaskExecutor):
                 worker_host=self.worker_host,
             )
             self.procs.append(executor)
+            executor.submit_task(task)
+            return self
+
+        # Revive any dead processes
+        next_dead_idx = next((i for i, p in enumerate(self.procs) if not p.alive), None)
+        if next_dead_idx is not None:
+            log.debug(f'Reviving dead {self.TYPE} pool for task {task.fn.path} ({task.id}) at index {next_dead_idx}')
+            executor = self.EXECUTOR(
+                cfg=self.cfg,
+                max_concurrency=self.max_tasks_per_process,
+                tasks_per_restart=self.tasks_per_restart,
+                idle_ttl=self.idle_process_ttl,
+                callbacks=self.callbacks,
+                worker_name=self.worker_name,
+                worker_host=self.worker_host,
+            )
+            self.procs[next_dead_idx] = executor
             executor.submit_task(task)
             return self
 

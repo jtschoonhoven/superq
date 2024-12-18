@@ -72,11 +72,24 @@ class ProcessTaskExecutor(executor_base.BaseTaskExecutor):
         return self
 
     @property
+    def alive(self) -> bool:
+        """
+        Return True if the child process is alive.
+        """
+        return bool(self.proc and self.proc.is_alive())
+
+    @property
     def capacity(self) -> int:
+        """
+        Return the number of additional tasks that may be submitted to this process.
+        """
         return self.info.capacity
 
     @property
     def active(self) -> int:
+        """
+        Return the number of tasks currently executing in this process.
+        """
         return self.info.active
 
     @staticmethod
@@ -400,7 +413,7 @@ class ProcessTransceiver:  # type: ignore [misc]
         """
         True if the process is shutting down.
         """
-        return self._is_shutting_down.value  # type: ignore [no-any-return]
+        return bool(self._is_shutting_down.value)  # type: ignore [no-any-return]
 
     @is_shutting_down.setter
     def is_shutting_down(self, value: bool) -> None:
