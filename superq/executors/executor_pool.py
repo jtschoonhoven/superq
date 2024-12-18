@@ -3,7 +3,7 @@ import random
 from datetime import timedelta
 from typing import ClassVar, TypeVar
 
-from superq import callbacks, tasks
+from superq import callbacks, config, tasks
 from superq.executors import executor_asyncio, executor_base, executor_process, executor_thread
 
 TaskExecutorProcessPoolType = TypeVar('TaskExecutorProcessPoolType', bound='TaskExecutorProcessPool')
@@ -23,12 +23,13 @@ class TaskExecutorProcessPool(executor_base.BaseTaskExecutor):
     max_tasks: int
     tasks_per_restart: int
     idle_process_ttl: timedelta
-    callbacks: 'callbacks.CallbackRegistry'
+    callbacks: dict['callbacks.ChildCallback', 'callbacks.ChildCallbackFn']
     worker_name: str | None
     worker_host: str | None
     procs: list['executor_process.ProcessTaskExecutor']
 
     __slots__ = (
+        'cfg',
         'max_processes',
         'max_tasks',
         'tasks_per_restart',
@@ -41,22 +42,18 @@ class TaskExecutorProcessPool(executor_base.BaseTaskExecutor):
 
     def __init__(
         self,
-        max_processes: int,
-        max_tasks: int,
-        tasks_per_restart: int,
-        idle_process_ttl: timedelta,
-        callbacks: 'callbacks.CallbackRegistry',  # type: ignore [name-defined]
-        worker_name: str | None = None,
-        worker_host: str | None = None,
+        cfg: 'config.Config',
+        callbacks: dict['callbacks.ChildCallback', 'callbacks.ChildCallbackFn'],  # type: ignore [name-defined]
     ) -> None:
+        self.cfg = cfg
         self.procs = []
-        self.max_processes = max_processes
-        self.max_tasks = max_tasks
-        self.tasks_per_restart = tasks_per_restart
+        self.max_processes = cfg.worker_max_processes
+        self.max_tasks = cfg.worker_max_processes
+        self.idle_process_ttl = cfg.worker_idle_process_ttl
+        self.tasks_per_restart = cfg.worker_max_process_tasks_per_restart
         self.callbacks = callbacks
-        self.idle_process_ttl = idle_process_ttl
-        self.worker_name = worker_name
-        self.worker_host = worker_host
+        self.worker_name = None
+        self.worker_host = None
 
     @property
     def max_tasks_per_process(self) -> int:
@@ -89,7 +86,9 @@ class TaskExecutorProcessPool(executor_base.BaseTaskExecutor):
         """
         # Start the first child process if none yet exist
         if not self.procs:
+            log.debug(f'Initializing new {self.TYPE} pool for task {task.fn.path} ({task.id})')
             executor = self.EXECUTOR(
+                cfg=self.cfg,
                 max_concurrency=self.max_tasks_per_process,
                 tasks_per_restart=self.tasks_per_restart,
                 idle_ttl=self.idle_process_ttl,
@@ -104,12 +103,20 @@ class TaskExecutorProcessPool(executor_base.BaseTaskExecutor):
         # Find the first inactive child process with capacity (if exists)
         next_empty_idx = next((i for i, p in enumerate(self.procs) if p.capacity and not p.active), None)
         if next_empty_idx is not None:
+            log.debug(
+                f'Submitting to idle {self.TYPE} pool for task {task.fn.path} ({task.id}) at index {next_empty_idx}'
+            )
             self.procs[next_empty_idx].submit_task(task)
             return self
 
         # Create a new child processor if there's room and all others are active
         if len(self.procs) < self.max_processes:
+            log.debug(
+                f'Initializing new process in {self.TYPE} pool for task '
+                f'{task.fn.path} ({task.id}) at index {len(self.procs)}'
+            )
             executor = self.EXECUTOR(
+                cfg=self.cfg,
                 max_concurrency=self.max_tasks_per_process,
                 tasks_per_restart=self.tasks_per_restart,
                 idle_ttl=self.idle_process_ttl,
@@ -132,11 +139,17 @@ class TaskExecutorProcessPool(executor_base.BaseTaskExecutor):
 
         # Choose a random child if all children have full capacity (this should not happen)
         if max_child_capacity <= 0:
-            log.warning(f'Task {task.id} submitted to task executor with no capacity: running anyway')
             next_child_idx = random.randint(0, len(self.procs) - 1)
+            log.warning(
+                f'Task {task.fn.path} ({task.id}) submitted to {self.TYPE} pool '
+                f'with no capacity: running anyway at index {next_child_idx}'
+            )
 
         # Submit this task to the event loop with the most capacity
-        log.debug(f'Submitting task {task.id} to {self.TYPE} pool at index {next_child_idx}')
+        log.debug(
+            f'Submitting to {self.TYPE} pool with {max_child_capacity} capacity '
+            f'at index {next_child_idx} for task {task.fn.path} ({task.id})'
+        )
         self.procs[next_child_idx].submit_task(task)
         return self
 
@@ -144,6 +157,7 @@ class TaskExecutorProcessPool(executor_base.BaseTaskExecutor):
         """
         Propagate kill signal to all child processes.
         """
+        log.debug(f'Shutting down {len(self.procs)} processes in {self.TYPE} pool (graceful={graceful})')
         for proc in self.procs:
             proc.kill(graceful=graceful)
 
@@ -156,6 +170,21 @@ class EventLoopTaskExecutorProcessPool(TaskExecutorProcessPool):  # type: ignore
     TYPE = 'asyncio'
     EXECUTOR = executor_asyncio.AsyncioTaskExecutor
 
+    def __init__(
+        self,
+        cfg: 'config.Config',
+        callbacks: dict['callbacks.ChildCallback', 'callbacks.ChildCallbackFn'],
+    ) -> None:
+        self.cfg = cfg
+        self.procs = []
+        self.max_processes = cfg.worker_max_event_loops
+        self.max_tasks = cfg.worker_max_event_loops * cfg.worker_max_coroutines_per_event_loop
+        self.idle_process_ttl = cfg.worker_idle_process_ttl
+        self.tasks_per_restart = cfg.worker_max_coroutine_tasks_per_restart
+        self.callbacks = callbacks
+        self.worker_name = None
+        self.worker_host = None
+
 
 class ThreadTaskExecutorProcessPool(TaskExecutorProcessPool):  # type: ignore [misc]
     """
@@ -164,3 +193,18 @@ class ThreadTaskExecutorProcessPool(TaskExecutorProcessPool):  # type: ignore [m
 
     TYPE = 'thread'
     EXECUTOR = executor_thread.ThreadTaskExecutor
+
+    def __init__(
+        self,
+        cfg: 'config.Config',
+        callbacks: dict['callbacks.ChildCallback', 'callbacks.ChildCallbackFn'],
+    ) -> None:
+        self.cfg = cfg
+        self.procs = []
+        self.max_processes = cfg.worker_max_thread_processes
+        self.max_tasks = cfg.worker_max_thread_processes * cfg.worker_max_threads_per_process
+        self.idle_process_ttl = cfg.worker_idle_process_ttl
+        self.tasks_per_restart = cfg.worker_max_thread_tasks_per_restart
+        self.callbacks = callbacks
+        self.worker_name = None
+        self.worker_host = None

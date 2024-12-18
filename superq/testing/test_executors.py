@@ -20,10 +20,11 @@ def test_process_executor(Executor: type[ProcessTaskExecutor]) -> None:
     assert task.status == 'WAITING'
 
     executor = Executor(
+        cfg=cfg,
         max_concurrency=2,
         tasks_per_restart=3,
         idle_ttl=timedelta(seconds=60),
-        callbacks=create_callback_registry(),
+        callbacks=create_callback_registry().child,
         worker_name='__worker_name__',
         worker_host='__worker_host__',
     )

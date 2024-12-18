@@ -11,6 +11,7 @@ select = [
     "I", # isort
 ]
 ignore = [
+    'C901', # Checks for cyclomatic complexity
     'E741', # Checks for ambiguous variable names (often frustrating inside comprehensions)
     'N802', # Checks for functions names that do not follow the snake_case naming convention
     'N806', # Checks for the use of non-lowercase variable names in functions
