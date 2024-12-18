@@ -1,3 +1,7 @@
+# Build the library for distribution
+build:
+	poetry build
+
 # Install all dependencies
 install:
 	poetry install --all-extras --with dev

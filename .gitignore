@@ -4,3 +4,5 @@
 .mypy_cache/
 .pytest_cache/
 .ruff_cache/
+superq.egg-info/
+dist/
