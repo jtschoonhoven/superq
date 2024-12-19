@@ -222,7 +222,7 @@ class ProcessTaskExecutor(executor_base.BaseTaskExecutor):
 
             elif info.is_idle(task_registry):
                 if info.is_shutting_down or info.is_idle_ttl_expired:
-                    log.debug('Shutting down inactive process executor: idle timeout expired')
+                    log.debug('Gracefully shutting down idle process executor')
                     cls.exit(task_registry, exit_code=0)
 
             if task:
@@ -386,10 +386,17 @@ class ProcessTransceiver:  # type: ignore [misc]
             self._num_tasks_completed.value += 1
 
         with self._num_tasks_til_restart.get_lock():
-            self._num_tasks_til_restart.value -= 1
+            tasks_til_restart = self._num_tasks_til_restart.value - 1
+            self._num_tasks_til_restart.value = tasks_til_restart
 
-        if self._num_tasks_til_restart.value <= 0:
-            self.is_shutting_down = True
+            # Initiate graceful shutdown if we've hit `tasks_per_restart`
+            if tasks_til_restart > 0:
+                log.debug(f'Executor completed {tasks_til_restart}/{self.tasks_per_restart} tasks until restart')
+            elif tasks_til_restart == 0:  # Match exactly 0 so users can configure this to never restart
+                log.debug(
+                    f'Executor completed {tasks_til_restart}/{self.tasks_per_restart} tasks: starting graceful shutdown'
+                )
+                self.is_shutting_down = True
 
     @property
     def capacity(self) -> int:
@@ -431,6 +438,11 @@ class ProcessTransceiver:  # type: ignore [misc]
         """
         This process is "idle" if no tasks are executing or scheduled.
         """
-        now = datetime.now()
-        idle_seconds = now.timestamp() - self._last_task_completed_at_seconds.value
-        return idle_seconds > self.idle_ttl.total_seconds()  # type: ignore [no-any-return]
+        now_seconds = datetime.now().timestamp()
+        ttl_seconds = self.idle_ttl.total_seconds()
+        is_expired = now_seconds - self._last_task_completed_at_seconds.value > ttl_seconds
+        if is_expired:
+            log.debug(f'Executor idle timeout expired after {ttl_seconds:.2f} seconds')
+            return True
+        else:
+            return False
