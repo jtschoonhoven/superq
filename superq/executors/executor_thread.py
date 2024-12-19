@@ -44,7 +44,7 @@ class ThreadTaskExecutor(executor_process.ProcessTaskExecutor):
 
             elif info.is_idle(task_registry):
                 if info.is_shutting_down or info.is_idle_ttl_expired:
-                    log.debug('Shutting down inactive thread executor: idle timeout expired')
+                    log.debug('Gracefully shutting down idle thread executor')
                     cls.exit(task_registry, exit_code=0)
 
             # The only way to kill a child thread is to kill the parent process so that's how we handle expired tasks
