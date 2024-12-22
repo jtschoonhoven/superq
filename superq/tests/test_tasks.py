@@ -8,9 +8,9 @@ from pytest_mock import MockFixture
 
 from superq import BaseBackend, MongoBackend, SqliteBackend, Task, TaskQueue
 from superq.config import Config
-from superq.testing.testing_utils import SQLITE_PATH
+from superq.tests.test_helpers import SQLITE_PATH
 
-cfg = Config()
+cfg = Config(task_retries_for_concurrency=9)
 sqlite_backend = SqliteBackend(cfg, path=SQLITE_PATH, TaskCls=Task)
 mongo_backend = MongoBackend(cfg, client=mongomock.MongoClient(), TaskCls=Task)
 
@@ -37,7 +37,7 @@ def test_worker_task_max_retries(backend: BaseBackend) -> None:
     spy = MagicMock()
     spy.side_effect = Exception('Nope!')
 
-    q = TaskQueue(Config(task_run_sync=True), backend=backend)
+    q = TaskQueue(Config(task_run_sync=True, task_retries_for_concurrency=9), backend=backend)
 
     # Define an example task with 2 retries
     @q.task(retries_for_error=2)
@@ -59,10 +59,9 @@ def test_worker_task_concurrency(backend: BaseBackend) -> None:
     spy = MagicMock()
     now = datetime.now()
 
-    q = TaskQueue(Config(task_run_sync=True), backend=backend)
+    q = TaskQueue(Config(task_run_sync=True, task_retries_for_concurrency=9), backend=backend)
 
     backend.delete_all_tasks()
-    q.cfg.task_retries_for_concurrency = 9  # Prevent infinite recursion
 
     # Helper function to mock a task as running for this user
     def mock_run_task() -> Task:
@@ -126,10 +125,9 @@ def test_worker_task_concurrency_kwargs(backend: BaseBackend) -> None:
     spy = MagicMock()
     now = datetime.now()
 
-    q = TaskQueue(Config(task_run_sync=True), backend=backend)
+    q = TaskQueue(Config(task_run_sync=True, task_retries_for_concurrency=9), backend=backend)
 
     backend.delete_all_tasks()  # Empty database
-    q.cfg.task_retries_for_concurrency = 9  # Prevent infinite recursion
 
     # Helper function to mock a task as running for this user
     def mock_run_task() -> Task:

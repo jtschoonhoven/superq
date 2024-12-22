@@ -94,7 +94,7 @@ class TaskExecutorProcessPool(executor_base.BaseTaskExecutor):
                 tasks_per_restart=self.tasks_per_restart,
                 idle_ttl=self.idle_process_ttl,
                 callbacks=self.callbacks,
-                worker_name=self.worker_name,
+                worker_name=f'{self.worker_name}-0',
                 worker_host=self.worker_host,
             )
             self.procs.append(executor)
@@ -111,7 +111,7 @@ class TaskExecutorProcessPool(executor_base.BaseTaskExecutor):
                 tasks_per_restart=self.tasks_per_restart,
                 idle_ttl=self.idle_process_ttl,
                 callbacks=self.callbacks,
-                worker_name=self.worker_name,
+                worker_name=f'{self.worker_name}-{next_dead_idx}',
                 worker_host=self.worker_host,
             )
             self.procs[next_dead_idx] = executor
@@ -139,7 +139,7 @@ class TaskExecutorProcessPool(executor_base.BaseTaskExecutor):
                 tasks_per_restart=self.tasks_per_restart,
                 idle_ttl=self.idle_process_ttl,
                 callbacks=self.callbacks,
-                worker_name=self.worker_name,
+                worker_name=f'{self.worker_name}-{len(self.procs)}',
                 worker_host=self.worker_host,
             )
             self.procs.append(executor)
@@ -180,7 +180,7 @@ class TaskExecutorProcessPool(executor_base.BaseTaskExecutor):
             proc.kill(graceful=graceful)
 
 
-class EventLoopTaskExecutorProcessPool(TaskExecutorProcessPool):  # type: ignore [misc]
+class AsyncioTaskExecutorProcessPool(TaskExecutorProcessPool):  # type: ignore [misc]
     """
     A higher-level task executor that manages a process pool of child event loop executors.
     """

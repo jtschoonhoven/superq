@@ -7,12 +7,14 @@ from datetime import timedelta
 from typing import Any, Callable, ClassVar, Optional, Union
 
 from superq import callbacks, tasks, workers, wrapped_fn
-from superq.backends import backend_base, backend_memory
+from superq.backends import backend_base
 from superq.config import Config
 from superq.exceptions import BackendError, TaskImportError
 from superq.executors import executor_base
 
 log = logging.getLogger(__name__)
+
+FnRegistry = dict[str, 'wrapped_fn.WrappedFn']
 
 
 class TaskQueue:
@@ -20,36 +22,35 @@ class TaskQueue:
     Main entrypoint for managing tasks, queues, backends, and workers.
     """
 
-    FN_REGISTRY: ClassVar[dict[str, 'wrapped_fn.WrappedFn']] = {}  # Class-level variable: does not go in __slots__
+    FN_REGISTRY: ClassVar[FnRegistry] = {}  # Class-level variable: does not go in __slots__
 
     cfg: 'Config'
-    worker: 'workers.Worker'
     backend: 'backend_base.BaseBackend'
-    task_cls: type['tasks.Task']
-    cb: 'callbacks.CallbackRegistry'
+    worker: 'workers.Worker'
+    cb_registry: 'callbacks.CallbackRegistry'
+    TaskCls: type['tasks.Task']
 
-    __slots__ = ('cfg', 'worker', 'backend', 'task_cls', 'cb')
+    __slots__ = ('cfg', 'backend', 'worker', 'cb_registry', 'TaskCls')
 
     def __init__(
         self,
         cfg: Optional['Config'] = None,
         backend: Optional['backend_base.BaseBackend'] = None,
-        task_cls: Optional[type['tasks.Task']] = None,
-        worker_cls: Optional[type['workers.Worker']] = None,
+        TaskCls: Optional[type['tasks.Task']] = None,
+        WorkerCls: Optional[type['workers.Worker']] = None,
+        ExtraExecutors: Optional[list[type['executor_base.BaseTaskExecutor']]] = None,
     ) -> None:
+        """
+        Initialize a new TaskQueue instance. All arguments are optional, typically you should provide a Config instance.
+        """
         self.cfg = cfg or Config()
-        self.cb = callbacks.CallbackRegistry()
-
-        # Load task and worker classes
-        worker_cls = worker_cls or workers.Worker
-        self.task_cls = task_cls or tasks.Task
-        self.task_cls.FN_REGISTRY = self.FN_REGISTRY
+        self.cb_registry = callbacks.CallbackRegistry()
+        self.TaskCls = TaskCls or tasks.Task
+        self.TaskCls.FN_REGISTRY = self.FN_REGISTRY
 
         # Register backend
         if backend:
             self.backend = backend
-        elif self.cfg.backend_in_memory:
-            self.backend = backend_memory.MemoryBackend(self.cfg, self.task_cls)
         elif self.cfg.backend_mongo_url:
             from superq.backends.backend_mongo import MongoBackend
 
@@ -61,14 +62,21 @@ class TaskQueue:
         else:
             raise BackendError('Backend is not configured')
 
-        # Initialize the worker
-        self.worker = worker_cls(
-            cfg=self.cfg,
-            backend=self.backend,
-            fn_registry=self.FN_REGISTRY,
-            cb=self.cb,
-            task_cls=self.task_cls,
+        # Initialize task executors
+        self.worker = (WorkerCls or workers.Worker)(
+            self.cfg,
+            self.backend,
+            self.FN_REGISTRY,
+            self.cb_registry,
+            TaskCls,
+            ExtraExecutors,
         )
+
+    def run(self) -> None:
+        """
+        Run the workers to execute tasks continuously until a signal is received.
+        """
+        self.worker.run()
 
     def task(
         self,
@@ -162,9 +170,9 @@ class TaskQueue:
                 fn=fn,
                 fn_name=fn.__name__,
                 fn_module=module_name,
-                cb=self.cb,
+                cb=self.cb_registry,
                 backend=self.backend,
-                TaskCls=self.task_cls,
+                TaskCls=self.TaskCls,
                 priority=priority,
                 timeout=timeout,
                 interval=interval,
@@ -200,43 +208,43 @@ class TaskQueue:
         """
         Register a callback function that runs when a task does not succeed and is rescheduled.
         """
-        return functools.partial(_task_callback_decorator, self.cb, 'on_task_retry')
+        return functools.partial(_task_callback_decorator, self.cb_registry, 'on_task_retry')
 
     def on_task_success(self) -> Callable[['callbacks.TaskCallbackFn'], 'callbacks.TaskCallbackFn']:
         """
         Register a callback function that runs when a task succeeds.
         """
-        return functools.partial(_task_callback_decorator, self.cb, 'on_task_success')
+        return functools.partial(_task_callback_decorator, self.cb_registry, 'on_task_success')
 
     def on_task_failure(self) -> Callable[['callbacks.TaskCallbackFn'], 'callbacks.TaskCallbackFn']:
         """
         Register a callback function that runs when a task fails and is not rescheduled.
         """
-        return functools.partial(_task_callback_decorator, self.cb, 'on_task_failure')
+        return functools.partial(_task_callback_decorator, self.cb_registry, 'on_task_failure')
 
     def on_worker_logconfig(self) -> Callable[['callbacks.WorkerCallbackFn'], 'callbacks.WorkerCallbackFn']:
         """
         Register a callback function that runs when the worker configures logging.
         """
-        return functools.partial(_worker_callback_decorator, self.cb, 'on_worker_logconfig')
+        return functools.partial(_worker_callback_decorator, self.cb_registry, 'on_worker_logconfig')
 
     def on_worker_start(self) -> Callable[['callbacks.WorkerCallbackFn'], 'callbacks.WorkerCallbackFn']:
         """
         Register a callback function that runs when the worker server starts.
         """
-        return functools.partial(_worker_callback_decorator, self.cb, 'on_worker_start')
+        return functools.partial(_worker_callback_decorator, self.cb_registry, 'on_worker_start')
 
     def on_worker_shutdown(self) -> Callable[['callbacks.WorkerCallbackFn'], 'callbacks.WorkerCallbackFn']:
         """
         Register a callback function that runs when the worker begins shutdown.
         """
-        return functools.partial(_worker_callback_decorator, self.cb, 'on_worker_shutdown')
+        return functools.partial(_worker_callback_decorator, self.cb_registry, 'on_worker_shutdown')
 
     def on_child_logconfig(self) -> Callable[['callbacks.ChildCallbackFn'], 'callbacks.ChildCallbackFn']:
         """
         Register a callback function that runs when a new child process or thread configures logging.
         """
-        return functools.partial(_child_callback_decorator, self.cb, 'on_child_logconfig')
+        return functools.partial(_child_callback_decorator, self.cb_registry, 'on_child_logconfig')
 
 
 def _child_callback_decorator(

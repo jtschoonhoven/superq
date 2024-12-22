@@ -43,6 +43,12 @@ class Config:  # type: ignore [misc]
     task_run_sync: bool = False
     # Log level to use for the worker process
     worker_log_level: Literal['', 'DEBUG', 'INFO', 'WARNING', 'ERROR', 'CRITICAL'] = ''
+    # If True, the worker will not start a pool to handle process-type tasks
+    worker_disable_process_pool: bool = False
+    # If True, the worker will not start a pool to handle threaded tasks
+    worker_disable_threads_pool: bool = False
+    # If True, the worker will not start a pool to handle asyncio tasks
+    worker_disable_asyncio_pool: bool = False
     # Whether to use processes or threads (this can also be set per-task)
     worker_default_type: 'executor_base.ChildWorkerTypeSync' = 'process'
     # Time to keep idle worker processes alive and ready to accept new tasks

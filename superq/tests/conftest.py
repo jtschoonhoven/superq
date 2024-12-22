@@ -3,7 +3,7 @@ from collections.abc import Iterator
 
 import pytest
 
-from superq.testing.testing_utils import SQLITE_PATH
+from superq.tests.test_helpers import SQLITE_PATH
 
 
 @pytest.fixture(autouse=True, scope='session')

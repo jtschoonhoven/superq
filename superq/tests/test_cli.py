@@ -2,8 +2,8 @@ import logging
 import subprocess
 import sys
 
-from superq import SIG_SOFT_SHUTDOWN, Config, SqliteBackend, TaskQueue, Worker
-from superq.testing.testing_utils import SQLITE_PATH
+from superq import Config, SqliteBackend, TaskQueue, Worker, workers
+from superq.tests.test_helpers import SQLITE_PATH
 
 cfg = Config()
 q = TaskQueue(cfg, backend=SqliteBackend(cfg, path=SQLITE_PATH))
@@ -37,7 +37,7 @@ def on_child_logconfig(name: str | None) -> None:
 def test_cli() -> None:
     # Start the worker in a child process
     worker = subprocess.Popen(
-        ['poetry', 'run', 'superq', 'superq.testing.test_cli'],
+        ['poetry', 'run', 'superq', 'superq.tests.test_cli'],
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
     )
@@ -53,7 +53,7 @@ def test_cli() -> None:
     assert asyncio_result.wait() == 'ok'
 
     # Stop the worker
-    worker.send_signal(SIG_SOFT_SHUTDOWN)
+    worker.send_signal(workers.SIGNALS_SOFT_SHUTDOWN[0])
     stdout, stderr = worker.communicate()  # Blocks until process exits
 
     # Confirm we captured logs as expected

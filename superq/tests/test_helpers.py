@@ -6,7 +6,7 @@ from pathlib import Path
 from typing import Any, Callable, Literal
 
 from superq.backends.backend_base import BaseBackend
-from superq.backends.backend_memory import MemoryBackend
+from superq.backends.backend_sqlite import SqliteBackend
 from superq.bson import ObjectId
 from superq.callbacks import CallbackRegistry, ChildCallbackFn
 from superq.config import Config
@@ -133,7 +133,7 @@ def wrap_fn(
         fn_name=fn_name or fn.__name__,
         fn_module=fn_module,
         cb=callbacks or create_callback_registry(),
-        backend=backend or create_backend(cfg=cfg),
+        backend=backend or SqliteBackend(cfg=cfg, path=SQLITE_PATH),
         TaskCls=Task,
         timeout=timeout,
         priority=priority,
@@ -148,14 +148,6 @@ def wrap_fn(
         concurrency_kwargs_limit=concurrency_kwargs_limit,
         worker_type=worker_type or cfg.worker_default_type,
     )
-
-
-def create_backend(Backend: type[BaseBackend] | None = None, cfg: Config | None = None) -> BaseBackend:
-    """
-    Test helper to initialize a new backend. Initializes a MemoryBackend by default.
-    """
-    Backend = Backend or MemoryBackend
-    return Backend(cfg=cfg or Config(), TaskCls=Task)
 
 
 def create_callback_registry(on_child_logconfig: ChildCallbackFn | None = setup_logging) -> CallbackRegistry:
