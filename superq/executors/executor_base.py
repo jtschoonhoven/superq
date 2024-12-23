@@ -16,7 +16,9 @@ class BaseTaskExecutor(ABC):  # type: ignore [misc]
 
     TYPE: ClassVar[ChildWorkerType]
 
-    __slots__ = ()
+    max_concurrency: int
+
+    __slots__ = ('max_concurrency',)
 
     @abstractmethod
     def __init__(

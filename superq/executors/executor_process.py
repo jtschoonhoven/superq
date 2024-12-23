@@ -31,10 +31,12 @@ class ProcessTaskExecutor(executor_base.BaseTaskExecutor):
     TYPE: ClassVar[executor_base.ChildWorkerType] = 'process'
     proc: mp.Process | None
     info: 'ProcessTransceiver'
+    cfg: 'config.Config'
+    max_concurrency: int
     worker_host: str | None
     worker_name: str | None
 
-    __slots__ = ('proc', 'info', 'cfg', 'worker_host', 'worker_name')
+    __slots__ = ('proc', 'info', 'cfg', 'max_concurrency', 'worker_host', 'worker_name')
 
     def __init__(
         self,
@@ -50,6 +52,7 @@ class ProcessTaskExecutor(executor_base.BaseTaskExecutor):
         self.cfg = cfg
         self.worker_host = worker_host
         self.worker_name = worker_name
+        self.max_concurrency = max_concurrency
         self.info = ProcessTransceiver(
             idle_ttl=idle_ttl,
             max_concurrency=max_concurrency,
@@ -338,6 +341,8 @@ class ProcessTransceiver:  # type: ignore [misc]
 
     def __post_init__(self) -> None:
         self._num_tasks_til_restart.value = self.tasks_per_restart
+        if self.tasks_per_restart <= 0:  # We can't use 0 to mean "never restart" so we use -1 instead
+            self._num_tasks_til_restart.value = -1
 
     def submit_task(self, task: 'tasks.Task') -> None:
         """
@@ -412,10 +417,24 @@ class ProcessTransceiver:  # type: ignore [misc]
     def capacity(self) -> int:
         """
         Remaining number of tasks that may be added to this process.
+        If the process is shutting down, capacity is always 0.
         """
-        if self.is_shutting_down:  # Executors have no capacity while shutting down
+        # Executors have no capacity while shutting down
+        if self.is_shutting_down:
             return 0
-        return min(self.max_concurrency - self._num_tasks_executing.value, self._num_tasks_til_restart.value)  # type: ignore [no-any-return]
+
+        # Max concurrency <= 0 is treated as unlimited, so we return the value of `_num_tasks_til_restart`
+        if self.max_concurrency <= 0:
+            return self._num_tasks_til_restart.value  # type: ignore [no-any-return]
+
+        capacity = self.max_concurrency - self._num_tasks_executing.value
+
+        # If _num_tasks_til_restart is negative, we treat it as "unlimited" and return the remaining capacity
+        if self._num_tasks_til_restart.value < 0:
+            return capacity  # type: ignore [no-any-return]
+
+        # If both values are non-negative, take the smaller
+        return min(capacity, self._num_tasks_til_restart.value)  # type: ignore [no-any-return]
 
     @property
     def active(self) -> int:

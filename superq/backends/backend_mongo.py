@@ -119,7 +119,7 @@ class MongoBackend(backend_base.BaseBackend):
 
     def claim_tasks(
         self,
-        max_tasks: int,
+        max_tasks: int,  # Ignored unless > 0
         worker_type: 'workers.WorkerType',
         worker_host: str | None = None,
         worker_name: str | None = None,
@@ -145,16 +145,15 @@ class MongoBackend(backend_base.BaseBackend):
                             'scheduled_for': {'$lte': now},
                             'status': {'$in': ['WAITING', 'RUNNING']},
                             'worker_type': worker_type,
-                        }
-                    )
-                    .sort(
+                        },
+                        limit=max_tasks if max_tasks >= 1 else None,
+                    ).sort(
                         [
                             ('priority', pymongo.ASCENDING),  # Sort first by priority (0 is higher than 1)
                             ('scheduled_for', pymongo.ASCENDING),  # Sort by schedule, oldest-to-newest
                             ('_id', pymongo.ASCENDING),  # Sort last by creation date, oldest-to-newest
                         ]
                     )
-                    .limit(max_tasks)  # Limit to the number of tasks we want to claim
                 )
 
                 # Get the IDs of the tasks we want to claim (or exit if there are no tasks to claim)

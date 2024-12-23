@@ -1,4 +1,5 @@
 import logging
+import math
 import signal
 import sys
 import time
@@ -142,13 +143,21 @@ class Worker:
 
             # Fetch tasks for each worker type and submit them for execution
             for executor in self.executors:
-                if not executor.capacity:
+                capacity = executor.capacity
+                if not capacity:
                     log.debug(f'Worker {executor.TYPE} pool executor is at max capacity')
                     continue
 
+                # Decide how many tasks to claim for this executor on this loop
+                max_tasks = math.ceil(executor.max_concurrency * self.cfg.worker_max_fill_ratio_per_loop)
+                if max_tasks <= 0:
+                    max_tasks = capacity  # Use capacity if `max_tasks` is unlimited
+                elif capacity >= 1:
+                    max_tasks = min(max_tasks, capacity)  # Use the lower number if both are positive
+
                 # Get the next task from the queue
                 claimed_tasks = self.backend.claim_tasks(
-                    max_tasks=executor.capacity,
+                    max_tasks=max_tasks,  # Zero or less is treated as no limit
                     worker_type=executor.TYPE,
                     worker_host=self.cfg.worker_hostname,
                     worker_name=f'{executor.TYPE}Pool',

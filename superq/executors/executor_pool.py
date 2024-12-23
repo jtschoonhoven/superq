@@ -19,8 +19,9 @@ class TaskExecutorProcessPool(executor_base.BaseTaskExecutor):
     EXECUTOR: ClassVar[type['executor_process.ProcessTaskExecutor']] = executor_process.ProcessTaskExecutor  # type: ignore [type-abstract]
     TYPE: ClassVar[executor_base.ChildWorkerType] = 'process'
 
+    cfg: 'config.Config'
     max_processes: int
-    max_tasks: int
+    max_concurrency: int
     tasks_per_restart: int
     idle_process_ttl: timedelta
     callbacks: dict['callbacks.ChildCallback', 'callbacks.ChildCallbackFn']
@@ -31,7 +32,7 @@ class TaskExecutorProcessPool(executor_base.BaseTaskExecutor):
     __slots__ = (
         'cfg',
         'max_processes',
-        'max_tasks',
+        'max_concurrency',
         'tasks_per_restart',
         'idle_process_ttl',
         'callbacks',
@@ -48,7 +49,7 @@ class TaskExecutorProcessPool(executor_base.BaseTaskExecutor):
         self.cfg = cfg
         self.procs = []
         self.max_processes = cfg.worker_max_processes
-        self.max_tasks = cfg.worker_max_processes
+        self.max_concurrency = cfg.worker_max_processes
         self.idle_process_ttl = cfg.worker_idle_process_ttl
         self.tasks_per_restart = cfg.worker_max_process_tasks_per_restart
         self.callbacks = callbacks
@@ -56,8 +57,8 @@ class TaskExecutorProcessPool(executor_base.BaseTaskExecutor):
         self.worker_host = None
 
     @property
-    def max_tasks_per_process(self) -> int:
-        return self.max_tasks // self.max_processes
+    def max_concurrency_per_process(self) -> int:
+        return self.max_concurrency // self.max_processes
 
     @property
     def capacity(self) -> int:
@@ -70,8 +71,8 @@ class TaskExecutorProcessPool(executor_base.BaseTaskExecutor):
             if executor and executor.alive:
                 capacity += max(executor.capacity, 0)
             else:
-                capacity += max(self.max_tasks_per_process, 0)
-        return capacity
+                capacity += max(self.max_concurrency_per_process, 0)
+        return max(capacity, -1)
 
     @property
     def active(self) -> int:
@@ -90,7 +91,7 @@ class TaskExecutorProcessPool(executor_base.BaseTaskExecutor):
             log.debug(f'Initializing new {self.TYPE} pool for task {task.fn.path} ({task.id})')
             executor = self.EXECUTOR(
                 cfg=self.cfg,
-                max_concurrency=self.max_tasks_per_process,
+                max_concurrency=self.max_concurrency_per_process,
                 tasks_per_restart=self.tasks_per_restart,
                 idle_ttl=self.idle_process_ttl,
                 callbacks=self.callbacks,
@@ -107,7 +108,7 @@ class TaskExecutorProcessPool(executor_base.BaseTaskExecutor):
             log.debug(f'Reviving dead {self.TYPE} pool for task {task.fn.path} ({task.id}) at index {next_dead_idx}')
             executor = self.EXECUTOR(
                 cfg=self.cfg,
-                max_concurrency=self.max_tasks_per_process,
+                max_concurrency=self.max_concurrency_per_process,
                 tasks_per_restart=self.tasks_per_restart,
                 idle_ttl=self.idle_process_ttl,
                 callbacks=self.callbacks,
@@ -135,7 +136,7 @@ class TaskExecutorProcessPool(executor_base.BaseTaskExecutor):
             )
             executor = self.EXECUTOR(
                 cfg=self.cfg,
-                max_concurrency=self.max_tasks_per_process,
+                max_concurrency=self.max_concurrency_per_process,
                 tasks_per_restart=self.tasks_per_restart,
                 idle_ttl=self.idle_process_ttl,
                 callbacks=self.callbacks,
@@ -196,7 +197,7 @@ class AsyncioTaskExecutorProcessPool(TaskExecutorProcessPool):  # type: ignore [
         self.cfg = cfg
         self.procs = []
         self.max_processes = cfg.worker_max_event_loops
-        self.max_tasks = cfg.worker_max_event_loops * cfg.worker_max_coroutines_per_event_loop
+        self.max_concurrency = cfg.worker_max_event_loops * cfg.worker_max_coroutines_per_event_loop
         self.idle_process_ttl = cfg.worker_idle_process_ttl
         self.tasks_per_restart = cfg.worker_max_coroutine_tasks_per_restart
         self.callbacks = callbacks
@@ -220,7 +221,7 @@ class ThreadTaskExecutorProcessPool(TaskExecutorProcessPool):  # type: ignore [m
         self.cfg = cfg
         self.procs = []
         self.max_processes = cfg.worker_max_thread_processes
-        self.max_tasks = cfg.worker_max_thread_processes * cfg.worker_max_threads_per_process
+        self.max_concurrency = cfg.worker_max_thread_processes * cfg.worker_max_threads_per_process
         self.idle_process_ttl = cfg.worker_idle_process_ttl
         self.tasks_per_restart = cfg.worker_max_thread_tasks_per_restart
         self.callbacks = callbacks

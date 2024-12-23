@@ -72,7 +72,9 @@ class Config:  # type: ignore [misc]
     # Extra time to allow for tasks to finish before sending SIGTERM and shutting down
     worker_grace_period: timedelta = timedelta(seconds=90)
     # How frequently the worker checks for new tasks
-    worker_poll_interval: timedelta = timedelta(seconds=1)
+    worker_poll_interval: timedelta = timedelta(seconds=5)
+    # The max percent of an executor's total capacity that can be filled in a single pass
+    worker_max_fill_ratio_per_loop: float = 0.25
     # How often the worker checks whether there are new periodic tasks to schedule
     worker_scheduler_interval: timedelta = timedelta(seconds=10)
     # How often the worker deletes tasks older than the `backend_task_ttl`

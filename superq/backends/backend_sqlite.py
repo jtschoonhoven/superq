@@ -106,7 +106,7 @@ class SqliteBackend(backend_base.BaseBackend):
 
     def claim_tasks(
         self,
-        max_tasks: int,
+        max_tasks: int,  # Ignored unless > 0
         worker_type: 'workers.WorkerType',
         worker_host: str | None = None,
         worker_name: str | None = None,
@@ -136,9 +136,9 @@ class SqliteBackend(backend_base.BaseBackend):
             'WHERE worker_type = ? '
             'AND scheduled_for <= ? '
             'AND status IN ("WAITING", "RUNNING") '
-            'ORDER BY priority ASC, scheduled_for ASC, id ASC LIMIT ?'
+            'ORDER BY priority ASC, scheduled_for ASC, id ASC'
         )
-        params = [
+        params: list[int | str | None] = [
             reschedule_for,  # scheduled_for = ?
             started_at,  # started_at = ?
             updated_at,  # updated_at = ?
@@ -147,8 +147,12 @@ class SqliteBackend(backend_base.BaseBackend):
             transaction_id,  # __transaction_id__ = ?
             worker_type,  # worker_type = ?
             now.isoformat(),  # scheduled_for <= ?
-            max_tasks,  # LIMIT ?
         ]
+
+        # Limit the results if max_tasks is a positive integer
+        if max_tasks >= 1:
+            sql += ' LIMIT ?'
+            params.append(max_tasks)
 
         with self._cursor(transaction=True) as cursor:
             cursor.execute(sql, params)
