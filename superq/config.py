@@ -43,6 +43,12 @@ class Config:  # type: ignore [misc]
     task_run_sync: bool = False
     # Log level to use for the worker process
     worker_log_level: Literal['', 'DEBUG', 'INFO', 'WARNING', 'ERROR', 'CRITICAL'] = ''
+    # If True, the worker will not start a pool to handle process-type tasks
+    worker_disable_process_pool: bool = False
+    # If True, the worker will not start a pool to handle threaded tasks
+    worker_disable_threads_pool: bool = False
+    # If True, the worker will not start a pool to handle asyncio tasks
+    worker_disable_asyncio_pool: bool = False
     # Whether to use processes or threads (this can also be set per-task)
     worker_default_type: 'executor_base.ChildWorkerTypeSync' = 'process'
     # Time to keep idle worker processes alive and ready to accept new tasks
@@ -66,7 +72,9 @@ class Config:  # type: ignore [misc]
     # Extra time to allow for tasks to finish before sending SIGTERM and shutting down
     worker_grace_period: timedelta = timedelta(seconds=90)
     # How frequently the worker checks for new tasks
-    worker_poll_interval: timedelta = timedelta(seconds=1)
+    worker_poll_interval: timedelta = timedelta(seconds=5)
+    # The max percent of an executor's total capacity that can be filled in a single pass
+    worker_max_fill_ratio_per_loop: float = 0.25
     # How often the worker checks whether there are new periodic tasks to schedule
     worker_scheduler_interval: timedelta = timedelta(seconds=10)
     # How often the worker deletes tasks older than the `backend_task_ttl`

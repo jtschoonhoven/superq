@@ -14,7 +14,7 @@ from multiprocessing.sharedctypes import Synchronized
 from multiprocessing.synchronize import Event, Lock
 from typing import Any, ClassVar, Literal, NamedTuple, Optional, TypeVar
 
-from superq import callbacks, config, tasks
+from superq import callbacks, config, tasks, workers
 from superq.bson import ObjectId
 from superq.executors import executor_base
 
@@ -31,21 +31,28 @@ class ProcessTaskExecutor(executor_base.BaseTaskExecutor):
     TYPE: ClassVar[executor_base.ChildWorkerType] = 'process'
     proc: mp.Process | None
     info: 'ProcessTransceiver'
+    cfg: 'config.Config'
+    max_concurrency: int
+    worker_host: str | None
+    worker_name: str | None
 
-    __slots__ = ('proc', 'info', 'cfg')
+    __slots__ = ('proc', 'info', 'cfg', 'max_concurrency', 'worker_host', 'worker_name')
 
     def __init__(
         self,
         cfg: 'config.Config',
+        callbacks: dict['callbacks.ChildCallback', 'callbacks.ChildCallbackFn'],
         max_concurrency: int,
         tasks_per_restart: int,
         idle_ttl: timedelta,
-        callbacks: dict['callbacks.ChildCallback', 'callbacks.ChildCallbackFn'],
         worker_name: str | None = None,
         worker_host: str | None = None,
     ) -> None:
         self.proc = None
         self.cfg = cfg
+        self.worker_host = worker_host
+        self.worker_name = worker_name
+        self.max_concurrency = max_concurrency
         self.info = ProcessTransceiver(
             idle_ttl=idle_ttl,
             max_concurrency=max_concurrency,
@@ -67,7 +74,7 @@ class ProcessTaskExecutor(executor_base.BaseTaskExecutor):
         if not self.proc or not self.proc.is_alive():  # Start a new process if necessary
             log.debug(f'Launching a new {self.TYPE} child process for task {task.fn.path} ({task.id})')
             self.info.is_shutting_down = False
-            self.proc = mp.Process(target=self.run, args=(self.info, self.cfg))
+            self.proc = mp.Process(target=self.run, args=(self.info, self.cfg), name=self.worker_name)
             self.proc.start()
         return self
 
@@ -105,10 +112,10 @@ class ProcessTaskExecutor(executor_base.BaseTaskExecutor):
         if self.proc and self.proc.pid and self.proc.is_alive():
             if graceful:
                 log.debug(f'Gracefully shutting down {self.TYPE} executor with pid {self.proc.pid}')
-                os.kill(self.proc.pid, executor_base.SIG_SOFT_SHUTDOWN)
+                os.kill(self.proc.pid, workers.SIGNALS_SOFT_SHUTDOWN[0])
             else:
                 log.debug(f'Forcefully shutting down {self.TYPE} executor with pid {self.proc.pid}')
-                os.kill(self.proc.pid, executor_base.SIG_HARD_SHUTDOWN)
+                os.kill(self.proc.pid, workers.SIGNALS_HARD_SHUTDOWN[0])
         else:
             log.debug(f'Ignoring shutdown request for {self.TYPE} executor: no active process')
 
@@ -151,7 +158,7 @@ class ProcessTaskExecutor(executor_base.BaseTaskExecutor):
         self.info.is_shutting_down = True
         if self.proc and self.proc.is_alive() and self.proc.pid:
             log.debug(f'Killing {self.TYPE} executor process {self.proc.pid} for timeout')
-            os.kill(self.proc.pid, executor_base.SIG_TIMEOUT)
+            os.kill(self.proc.pid, workers.SIGNALS_TIMEOUT[0])
         else:
             log.debug(f'Shutting down inactive {self.TYPE} executor process for timeout')
 
@@ -185,10 +192,12 @@ class ProcessTaskExecutor(executor_base.BaseTaskExecutor):
             return force_shutdown(sig, *args, is_timeout=True, **kwargs)
 
         # Handle all signals
-        signal.signal(executor_base.SIG_SOFT_SHUTDOWN, graceful_shutdown)
-        signal.signal(executor_base.SIG_SOFT_SHUTDOWN_ALT, graceful_shutdown)
-        signal.signal(executor_base.SIG_TIMEOUT, timeout_shutdown)
-        signal.signal(executor_base.SIG_HARD_SHUTDOWN, force_shutdown)
+        for sig in workers.SIGNALS_SOFT_SHUTDOWN:
+            signal.signal(sig, graceful_shutdown)
+        for sig in workers.SIGNALS_HARD_SHUTDOWN:
+            signal.signal(sig, force_shutdown)
+        for sig in workers.SIGNALS_TIMEOUT:
+            signal.signal(sig, timeout_shutdown)
 
     @classmethod
     def run(cls, info: 'ProcessTransceiver', cfg: 'config.Config') -> None:
@@ -206,7 +215,7 @@ class ProcessTaskExecutor(executor_base.BaseTaskExecutor):
             if task_registry.get(task.id):
                 pid = os.getpid()
                 log.warning(f'Task {task.fn.path} ({task.id}) timed out in process executor: killing process {pid}')
-                os.kill(pid, executor_base.SIG_TIMEOUT)
+                os.kill(pid, workers.SIGNALS_TIMEOUT[0])
 
         while True:
             task = info.pop_task(task_registry)
@@ -332,6 +341,8 @@ class ProcessTransceiver:  # type: ignore [misc]
 
     def __post_init__(self) -> None:
         self._num_tasks_til_restart.value = self.tasks_per_restart
+        if self.tasks_per_restart <= 0:  # We can't use 0 to mean "never restart" so we use -1 instead
+            self._num_tasks_til_restart.value = -1
 
     def submit_task(self, task: 'tasks.Task') -> None:
         """
@@ -391,10 +402,14 @@ class ProcessTransceiver:  # type: ignore [misc]
 
             # Initiate graceful shutdown if we've hit `tasks_per_restart`
             if tasks_til_restart > 0:
-                log.debug(f'Executor completed {tasks_til_restart}/{self.tasks_per_restart} tasks until restart')
+                log.debug(
+                    f'Executor finished task {task.fn.path} ({task.id}): '
+                    f'{self.tasks_per_restart - tasks_til_restart} remaining until executor restart'
+                )
             elif tasks_til_restart == 0:  # Match exactly 0 so users can configure this to never restart
                 log.debug(
-                    f'Executor completed {tasks_til_restart}/{self.tasks_per_restart} tasks: starting graceful shutdown'
+                    f'Executor finished final task {task.fn.path} ({task.id}) '
+                    f'of {self.tasks_per_restart} per restart: starting executor shutdown'
                 )
                 self.is_shutting_down = True
 
@@ -402,10 +417,24 @@ class ProcessTransceiver:  # type: ignore [misc]
     def capacity(self) -> int:
         """
         Remaining number of tasks that may be added to this process.
+        If the process is shutting down, capacity is always 0.
         """
-        if self.is_shutting_down:  # Executors have no capacity while shutting down
+        # Executors have no capacity while shutting down
+        if self.is_shutting_down:
             return 0
-        return min(self.max_concurrency - self._num_tasks_executing.value, self._num_tasks_til_restart.value)  # type: ignore [no-any-return]
+
+        # Max concurrency <= 0 is treated as unlimited, so we return the value of `_num_tasks_til_restart`
+        if self.max_concurrency <= 0:
+            return self._num_tasks_til_restart.value  # type: ignore [no-any-return]
+
+        capacity = self.max_concurrency - self._num_tasks_executing.value
+
+        # If _num_tasks_til_restart is negative, we treat it as "unlimited" and return the remaining capacity
+        if self._num_tasks_til_restart.value < 0:
+            return capacity  # type: ignore [no-any-return]
+
+        # If both values are non-negative, take the smaller
+        return min(capacity, self._num_tasks_til_restart.value)  # type: ignore [no-any-return]
 
     @property
     def active(self) -> int:
@@ -442,7 +471,6 @@ class ProcessTransceiver:  # type: ignore [misc]
         ttl_seconds = self.idle_ttl.total_seconds()
         is_expired = now_seconds - self._last_task_completed_at_seconds.value > ttl_seconds
         if is_expired:
-            log.debug(f'Executor idle timeout expired after {ttl_seconds:.2f} seconds')
             return True
         else:
             return False

@@ -3,16 +3,24 @@ try:
     import pymongo.collection
 except ImportError as e:
     raise ImportError('Install `pymongo` to use the superq Mongo backend: `pip install superq[pymongo]`') from e
+import logging
 import pickle
-from datetime import datetime
+import random
+import time
+from collections.abc import Iterator
+from contextlib import contextmanager
+from datetime import datetime, timedelta
 from typing import Any, Optional
 
-from superq import tasks, wrapped_fn
+import pymongo.errors
+
+from superq import tasks, workers, wrapped_fn
 from superq.backends import backend_base
 from superq.bson import ObjectId
 from superq.config import Config
-from superq.exceptions import TaskNotFoundError
-from superq.executors import executor_base
+from superq.exceptions import BackendError, TaskImportError, TaskNotFoundError
+
+log = logging.getLogger(__name__)
 
 
 class MongoBackend(backend_base.BaseBackend):
@@ -94,89 +102,155 @@ class MongoBackend(backend_base.BaseBackend):
 
         return self.deserialize_task(new_task_dict)
 
-    def pop(
+    @contextmanager
+    def transation(self) -> Iterator[None]:
+        """
+        Context manager that starts a transaction and commits it on success, or aborts it on failure.
+        """
+        with self._client.start_session() as session:
+            session.start_transaction()
+            try:
+                yield
+            except Exception as e:
+                session.abort_transaction()
+                raise e
+            else:
+                session.commit_transaction()
+
+    def claim_tasks(
         self,
-        set_running=True,
-        reschedule=True,
-        prioritize=True,
-        worker_types: list['executor_base.ChildWorkerType'] | None = None,
+        max_tasks: int,  # Ignored unless > 0
+        worker_type: 'workers.WorkerType',
         worker_host: str | None = None,
         worker_name: str | None = None,
         run_sync=False,
-    ) -> Optional['tasks.Task']:
+        retry_delay=timedelta(seconds=1),
+    ) -> list['tasks.Task']:
         """
-        Pop the next task from the queue. Workers should call this method with `set_running` to "claim" a task.
-        Set `reschedule=True` to automatically retry the task in case of system failure (recommended).
+        "Claim" tasks in Mongo by updating and returning them atomically.
+        Automatically reschedules tasks and sets `status=RUNNING`.
         """
         now = datetime.now()
-        reschedule_for = now + self.cfg.task_timeout
 
-        query = {'scheduled_for': {'$lte': now}, 'status': {'$in': ['WAITING', 'RUNNING']}}
-        if worker_types is not None:
-            query['worker_type'] = {'$in': worker_types}
+        # No need to hit the database if we're not claiming any tasks
+        if max_tasks <= 0:
+            return []
 
-        mutation = {
-            '$set': {
-                'started_at': now,
-                'updated_at': now,
-                'worker_host': worker_host,
-                'worker_name': worker_name,
-            },
-        }
-        sort = [
-            ('priority', pymongo.ASCENDING),  # Sort by priority (0 is higher than 1)
-            ('scheduled_for', pymongo.ASCENDING),  # Sort by schedule, oldest-to-newest
-            ('_id', pymongo.ASCENDING),  # Sort by created, oldest-to-newest
-        ]
+        try:
+            # There's no way to update and return documents atomically in MongoDB, so we do 2 requests in a transaction
+            with self.transation():
+                task_dicts: list[dict[str, Any]] = list(
+                    self.db.find(
+                        {  # Fetch all incomplete tasks scheduled to run before now
+                            'scheduled_for': {'$lte': now},
+                            'status': {'$in': ['WAITING', 'RUNNING']},
+                            'worker_type': worker_type,
+                        },
+                        limit=max_tasks if max_tasks >= 1 else None,
+                    ).sort(
+                        [
+                            ('priority', pymongo.ASCENDING),  # Sort first by priority (0 is higher than 1)
+                            ('scheduled_for', pymongo.ASCENDING),  # Sort by schedule, oldest-to-newest
+                            ('_id', pymongo.ASCENDING),  # Sort last by creation date, oldest-to-newest
+                        ]
+                    )
+                )
 
-        if set_running:
-            mutation['$set']['status'] = 'RUNNING'
-        if reschedule:
-            mutation['$set']['scheduled_for'] = reschedule_for
-        if not prioritize:
-            sort.pop(0)  # Don't sort by `priority`
+                # Get the IDs of the tasks we want to claim (or exit if there are no tasks to claim)
+                task_ids = [ObjectId(task_dict['_id']) for task_dict in task_dicts]
+                if not task_ids:
+                    return []
 
-        # Find-one-and-update is atomic, so this is thread safe
-        # Note that this returns the *original* task, before the mutation was applied
-        task_dict = self.db.find_one_and_update(
-            query, mutation, sort=sort, return_document=pymongo.ReturnDocument.BEFORE
-        )
-        if not task_dict:
-            return None
+                mutation = {
+                    'status': 'RUNNING',
+                    'scheduled_for': now + self.cfg.task_timeout,
+                    'started_at': now,
+                    'updated_at': now,
+                    'worker_host': worker_host,
+                    'worker_name': worker_name,
+                }
 
-        task = self.deserialize_task(task_dict)
+                # Update the tasks to claim them
+                result = self.db.update_many(
+                    {'_id': {'$in': task_ids}},
+                    {'$set': mutation},
+                )
 
-        # Update the task to match what's in the DB
-        task.started_at = now
-        task.updated_at = now
-        task.worker_host = worker_host
-        task.worker_name = worker_name
-        task.status = 'RUNNING' if set_running else task.status
-        task.scheduled_for = reschedule_for if reschedule else task.scheduled_for
+                # Raise an exception to abort the transaction if we didn't claim all the tasks:
+                # This can happen when multiple workers try to claim the same task at the same time
+                if result.modified_count < len(task_ids):
+                    raise BackendError(
+                        f'Mongo backend `update_many` claimed fewer tasks ({result.modified_count}) '
+                        f'than expected ({len(task_ids)}): aborting transaction'
+                    )
 
-        # Handle expired tasks
-        if task_dict['status'] == 'RUNNING':
-            error = f'Task timed out after {int(task.fn.timeout.total_seconds())} seconds'
-            error_type: tasks.TaskFailureType = 'TIMEOUT'
+        # Handle retriable errors with some jittered delay and exponential backoff
+        except (BackendError, pymongo.errors.OperationFailure) as e:
+            retry_delay_ms = int(retry_delay.total_seconds() * 1000)
+            delay_seconds = random.randrange(0, retry_delay_ms) / 1000  # Add jitter to reduce the odds of collision
 
-            # Fail tasks with no remaining retries
-            if task.can_retry_for_error:
-                task.reschedule(error, error_type=error_type, incr_num_timeouts=True, run_sync=run_sync)
-            else:
-                task.set_failed(error=error, error_type=error_type)
-                task.fn.cb.fn[task.fn.path]['on_failure'](task)
-                task.fn.cb.task['on_task_failure'](task)
+            log.exception(f'Failed to claim {len(task_ids)} {worker_type} tasks, retrying in {delay_seconds:.2f}s: {e}')
+            time.sleep(random.randrange(0, retry_delay_ms) // 1000)
 
-            # Don't return the expired task: fetch a fresh one
-            return self.pop(
-                set_running=set_running,
-                reschedule=reschedule,
+            # Retry with exponential backoff
+            return self.claim_tasks(
+                max_tasks=max_tasks,
+                worker_type=worker_type,
                 worker_host=worker_host,
                 worker_name=worker_name,
-                run_sync=run_sync,
+                retry_delay=retry_delay * 2,
             )
 
-        return task
+        mutation_without_status_and_started_at = {k: v for k, v in mutation.items() if k != 'status'}
+        claimed_tasks: list[tasks.Task] = []
+
+        # Update and deserialize the claimed tasks and handle timeouts
+        for task_dict in task_dicts:
+            task_dict.update(mutation_without_status_and_started_at)  # Manually apply the mutation
+            task = self.deserialize_task(task_dict)
+
+            try:
+                # Add this task to the result if it is not already running
+                if task.status != 'RUNNING' or not task.started_at:
+                    task.status = 'RUNNING'
+                    task.started_at = now
+                    claimed_tasks.append(task)
+
+                # If this task is already running and has NOT timed out, skip it
+                elif task.started_at + task.fn.timeout >= now:
+                    continue
+
+                # Otherwise handle the timeout and skip this task for now
+                elif task.started_at + task.fn.timeout < now:
+                    error = f'Task {task.fn.path} ({task.id}) timed out after {int(task.fn.timeout.total_seconds())}s'
+                    error_type: tasks.TaskFailureType = 'TIMEOUT'
+                    if task.can_retry_for_error:
+                        log.warning(f'{error}: rescheduling')
+                        task.reschedule(error, error_type=error_type, incr_num_timeouts=True, run_sync=run_sync)
+                    else:
+                        log.warning(f'{error}: failed permanently')
+                        task.set_failed(error=error, error_type=error_type)
+                        task.fn.cb.fn[task.fn.path]['on_failure'](task)
+                        task.fn.cb.task['on_task_failure'](task)
+
+            # Handle import errors
+            except TaskImportError as e:
+                error = str(e)
+                error_type = 'ERROR'
+                if task.can_retry_for_error:
+                    log.warning(f'{error}: rescheduling')
+                    task.reschedule(error, error_type=error_type, incr_num_tries=True, run_sync=run_sync)
+                else:
+                    log.warning(f'{error}: failed permanently')
+                    task.set_failed(error=error, error_type=error_type)
+                    task.fn.cb.fn[task.fn.path]['on_failure'](task)
+                    task.fn.cb.task['on_task_failure'](task)
+                log.error(
+                    f'Failed to claim task {task_dict.get("fn_name")}.{task_dict.get("fn_module")} '
+                    f'({task_dict["_id"]}) due to import error: {e}'
+                )
+
+        return claimed_tasks
 
     def update(self, task: 'tasks.Task', *, fields: list[str]) -> None:
         """

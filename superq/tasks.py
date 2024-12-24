@@ -6,7 +6,7 @@ from dataclasses import dataclass
 from datetime import datetime
 from typing import Any, ClassVar, Literal, Optional
 
-from superq import wrapped_fn
+from superq import workers, wrapped_fn
 from superq.backends import backend_base
 from superq.bson import ObjectId
 from superq.exceptions import SuperqError, TaskConcurrencyError, TaskImportError
@@ -50,7 +50,7 @@ class Task:  # type: ignore [misc]
     started_at: datetime | None
     ended_at: datetime | None
     scheduled_for: datetime  # Task won't run until this time (or later)
-    worker_type: 'executor_base.ChildWorkerType'  # Type of worker that will execute this task
+    worker_type: 'workers.WorkerType'  # Type of worker that will execute this task
     worker_host: str | None  # Hostname of the worker server that executed this task
     worker_name: str | None  # ID of the worker process or thread that executed this task
     api_version: Literal['2024-11-04'] = '2024-11-04'

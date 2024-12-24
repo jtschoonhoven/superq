@@ -1,12 +1,10 @@
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from datetime import datetime
-from typing import Optional
 
-from superq import tasks, wrapped_fn
+from superq import tasks, workers, wrapped_fn
 from superq.bson import ObjectId
 from superq.config import Config
-from superq.executors import executor_base
 
 ScalarType = str | int | float | bool | bytes | None
 SCALARS: tuple[type[ScalarType], ...] = (str, int, float, bool, bytes, type(None))
@@ -36,19 +34,17 @@ class BaseBackend(ABC):  # type: ignore [misc]
         raise NotImplementedError()
 
     @abstractmethod
-    def pop(
+    def claim_tasks(
         self,
-        set_running=True,
-        reschedule=True,
-        prioritize=True,
-        worker_types: list['executor_base.ChildWorkerType'] | None = None,
+        max_tasks: int,
+        worker_type: 'workers.WorkerType',
         worker_host: str | None = None,
         worker_name: str | None = None,
         run_sync=False,
-    ) -> Optional['tasks.Task']:
+    ) -> list['tasks.Task']:
         """
-        Pop the next task from the queue. Workers should call this method with `set_running` to "claim" a task.
-        Set `reschedule=True` to automatically retry the task in case of system failure (recommended).
+        "Claim" tasks in Mongo by updating and returning them atomically.
+        Automatically reschedules tasks and sets `status=RUNNING`.
         """
         raise NotImplementedError()
 

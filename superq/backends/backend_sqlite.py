@@ -11,12 +11,11 @@ from contextlib import contextmanager
 from datetime import datetime
 from typing import Any, ClassVar, Optional, Union
 
-from superq import tasks, wrapped_fn
+from superq import tasks, workers, wrapped_fn
 from superq.backends import backend_base
 from superq.bson import ObjectId
 from superq.config import Config
-from superq.exceptions import TaskNotFoundError
-from superq.executors import executor_base
+from superq.exceptions import TaskImportError, TaskNotFoundError
 
 log = logging.getLogger(__name__)
 
@@ -105,19 +104,17 @@ class SqliteBackend(backend_base.BaseBackend):
 
         return self.deserialize_task(task_dict)
 
-    def pop(
+    def claim_tasks(
         self,
-        set_running=True,
-        reschedule=True,
-        prioritize=True,
-        worker_types: list['executor_base.ChildWorkerType'] | None = None,
+        max_tasks: int,  # Ignored unless > 0
+        worker_type: 'workers.WorkerType',
         worker_host: str | None = None,
         worker_name: str | None = None,
         run_sync=False,
-    ) -> Optional['tasks.Task']:
+    ) -> list['tasks.Task']:
         """
-        Pop the next task from the queue. Workers should call this method with `set_running` to "claim" a task.
-        Set `reschedule=True` to automatically retry the task in case of system failure (recommended).
+        "Claim" tasks in Mongo by updating and returning them atomically.
+        Automatically reschedules tasks and sets `status=RUNNING`.
         """
         now = datetime.now()
         transaction_id = str(uuid.uuid4())
@@ -125,69 +122,90 @@ class SqliteBackend(backend_base.BaseBackend):
         updated_at = now.isoformat()
         reschedule_for = (now + self.cfg.task_timeout).isoformat()
 
-        # SQL to claim the next task
+        # SQL to claim tasks
         sql = (
             'UPDATE tasks SET'
+            ' status = "RUNNING",'
+            ' scheduled_for = ?,'
             ' started_at = ?,'
             ' updated_at = ?,'
             ' worker_host = ?,'
             ' worker_name = ?,'
             ' __transaction_id__ = ?,'
-            ' __prev_status__ = status'
+            ' __prev_status__ = status '
+            'WHERE worker_type = ? '
+            'AND scheduled_for <= ? '
+            'AND status IN ("WAITING", "RUNNING") '
+            'ORDER BY priority ASC, scheduled_for ASC, id ASC'
         )
-        params = [started_at, updated_at, worker_host, worker_name, transaction_id]
+        params: list[int | str | None] = [
+            reschedule_for,  # scheduled_for = ?
+            started_at,  # started_at = ?
+            updated_at,  # updated_at = ?
+            worker_host,  # worker_host = ?
+            worker_name,  # worker_name = ?
+            transaction_id,  # __transaction_id__ = ?
+            worker_type,  # worker_type = ?
+            now.isoformat(),  # scheduled_for <= ?
+        ]
 
-        if set_running:
-            sql += ', status = "RUNNING"'
-        if reschedule:
-            sql += ', scheduled_for = ?'
-            params.append(reschedule_for)
-
-        sql += ' WHERE scheduled_for <= ? AND status IN ("WAITING", "RUNNING")'
-        params.append(now.isoformat())
-
-        if worker_types is not None:
-            sql += f' AND worker_type IN ({", ".join(["?" for _ in worker_types])})'
-            for worker_type in worker_types:
-                params.append(worker_type)
-
-        if not prioritize:
-            sql += ' ORDER BY scheduled_for ASC, id ASC LIMIT 1'
-        else:
-            sql += ' ORDER BY priority ASC, scheduled_for ASC, id ASC LIMIT 1'
+        # Limit the results if max_tasks is a positive integer
+        if max_tasks >= 1:
+            sql += ' LIMIT ?'
+            params.append(max_tasks)
 
         with self._cursor(transaction=True) as cursor:
             cursor.execute(sql, params)
             if not cursor.rowcount:
-                return None
-            cursor.execute('SELECT * FROM tasks WHERE __transaction_id__ = ? LIMIT 1', (transaction_id,))
-            task_dict: dict[str, Any] = cursor.fetchone()
+                return []
+            cursor.execute('SELECT * FROM tasks WHERE __transaction_id__ = ?', (transaction_id,))
+            task_dicts: list[dict[str, Any]] = cursor.fetchall()
 
-        prev_status = task_dict['__prev_status__']
-        task = self.deserialize_task(task_dict)
+        claimed_tasks: list[tasks.Task] = []
 
-        # Handle expired tasks
-        if prev_status == 'RUNNING':
-            error = f'Task timed out after {int(task.fn.timeout.total_seconds())} seconds'
-            error_type: tasks.TaskFailureType = 'TIMEOUT'
+        # Update and deserialize the claimed tasks and handle timeouts
+        for task_dict in task_dicts:
+            task = self.deserialize_task(task_dict)
+            prev_status: tasks.TaskStatus = task_dict['__prev_status__']
 
-            if task.can_retry_for_timeout:
-                task.reschedule(error=error, error_type=error_type, incr_num_timeouts=True, run_sync=run_sync)
-            else:
-                task.set_failed(error=error, error_type=error_type)
-                task.fn.cb.fn[task.fn.path]['on_failure'](task)
-                task.fn.cb.task['on_task_failure'](task)
+            try:
+                # Add this task to the result if it is not already running
+                if prev_status != 'RUNNING' or not task.started_at:
+                    claimed_tasks.append(task)
 
-            # Return the next task
-            return self.pop(
-                set_running=set_running,
-                reschedule=reschedule,
-                worker_host=worker_host,
-                worker_name=worker_name,
-                run_sync=run_sync,
-            )
+                # If this task is already running and has NOT timed out, skip it
+                elif task.started_at + task.fn.timeout >= now:
+                    continue
 
-        return task
+                # Otherwise handle the timeout and skip this task for now
+                elif task.started_at + task.fn.timeout < now:
+                    error = f'Task timed out after {int(task.fn.timeout.total_seconds())} seconds'
+                    error_type: tasks.TaskFailureType = 'TIMEOUT'
+                    if task.can_retry_for_error:
+                        task.reschedule(error, error_type=error_type, incr_num_timeouts=True, run_sync=run_sync)
+                    else:
+                        task.set_failed(error=error, error_type=error_type)
+                        task.fn.cb.fn[task.fn.path]['on_failure'](task)
+                        task.fn.cb.task['on_task_failure'](task)
+
+            # Handle import errors
+            except TaskImportError as e:
+                error = str(e)
+                error_type = 'ERROR'
+                if task.can_retry_for_error:
+                    log.warning(f'{error}: rescheduling')
+                    task.reschedule(error, error_type=error_type, incr_num_tries=True, run_sync=run_sync)
+                else:
+                    log.warning(f'{error}: failed permanently')
+                    task.set_failed(error=error, error_type=error_type)
+                    task.fn.cb.fn[task.fn.path]['on_failure'](task)
+                    task.fn.cb.task['on_task_failure'](task)
+                log.error(
+                    f'Failed to claim task {task_dict.get("fn_name")}.{task_dict.get("fn_module")} '
+                    f'({task_dict["_id"]}) due to import error: {e}'
+                )
+
+        return claimed_tasks
 
     def update(self, task: 'tasks.Task', *, fields: list[str]) -> None:
         """

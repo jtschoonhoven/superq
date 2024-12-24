@@ -7,16 +7,16 @@ from superq.config import Config
 from superq.executors.executor_asyncio import AsyncioTaskExecutor
 from superq.executors.executor_process import ProcessTaskExecutor
 from superq.executors.executor_thread import ThreadTaskExecutor
-from superq.testing.testing_utils import SQLITE_PATH, create_backend, create_callback_registry, create_task, wrap_fn
+from superq.tests.test_helpers import SQLITE_PATH, create_callback_registry, create_task, wrap_fn
 
 cfg = Config(backend_sqlite_path=SQLITE_PATH)
-backend = create_backend(SqliteBackend, cfg)
+backend = SqliteBackend(cfg, path=SQLITE_PATH)
 my_fn = wrap_fn(lambda: None, backend=backend)
 
 
 @pytest.mark.parametrize(['Executor'], [(AsyncioTaskExecutor,), (ThreadTaskExecutor,), (ProcessTaskExecutor,)])
 def test_process_executor(Executor: type[ProcessTaskExecutor]) -> None:
-    task = create_task(fn_name='my_fn', fn_module='superq.testing.test_executors', save_to_backend=backend)
+    task = create_task(fn_name='my_fn', fn_module='superq.tests.test_executors', save_to_backend=backend)
     assert task.status == 'WAITING'
 
     executor = Executor(

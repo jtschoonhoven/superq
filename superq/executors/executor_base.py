@@ -1,20 +1,12 @@
-import signal
 from abc import ABC, abstractmethod
 from typing import ClassVar, Literal, TypeVar, Union
 
-from superq import tasks
+from superq import callbacks, config, tasks
 
 ChildWorkerTypeSync = Literal['process', 'thread']
 ChildWorkerTypeAsync = Literal['asyncio']
 ChildWorkerType = Union[ChildWorkerTypeSync, ChildWorkerTypeAsync]
-
 TaskExecutorType = TypeVar('TaskExecutorType', bound='BaseTaskExecutor')
-
-# We use the following signals for inter-process comms
-SIG_SOFT_SHUTDOWN: int = signal.SIGINT.value  # The child process should initiate graceful shutdown
-SIG_SOFT_SHUTDOWN_ALT: int = signal.SIGQUIT.value  # The child process should initiate graceful shutdown
-SIG_HARD_SHUTDOWN: int = signal.SIGTERM.value  # The child process should exit asap with minimal cleanup
-SIG_TIMEOUT: int = signal.SIGABRT.value  # The child process has timed out and should exit immediately
 
 
 class BaseTaskExecutor(ABC):  # type: ignore [misc]
@@ -24,7 +16,17 @@ class BaseTaskExecutor(ABC):  # type: ignore [misc]
 
     TYPE: ClassVar[ChildWorkerType]
 
-    __slots__ = ()
+    max_concurrency: int
+
+    __slots__ = ('max_concurrency',)
+
+    @abstractmethod
+    def __init__(
+        self,
+        cfg: 'config.Config',
+        callbacks: dict['callbacks.ChildCallback', 'callbacks.ChildCallbackFn'],
+    ) -> None:
+        raise NotImplementedError()
 
     @property
     @abstractmethod
