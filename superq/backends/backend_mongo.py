@@ -103,7 +103,7 @@ class MongoBackend(backend_base.BaseBackend):
         return self.deserialize_task(new_task_dict)
 
     @contextmanager
-    def transation(self) -> Iterator[None]:
+    def transaction(self) -> Iterator[None]:
         """
         Context manager that starts a transaction and commits it on success, or aborts it on failure.
         """
@@ -138,7 +138,7 @@ class MongoBackend(backend_base.BaseBackend):
 
         try:
             # There's no way to update and return documents atomically in MongoDB, so we do 2 requests in a transaction
-            with self.transation():
+            with self.transaction():
                 task_dicts: list[dict[str, Any]] = list(
                     self.db.find(
                         {  # Fetch all incomplete tasks scheduled to run before now
