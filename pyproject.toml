@@ -1,6 +1,6 @@
 [tool.poetry]
 name = "superq"
-version = "0.2.0"
+version = "0.2.1"
 description = "Simple, durable, asyncio-compatible task queue inspired by Celery and Huey."
 authors = ["jtschoonhoven <jtschoonhoven@gmail.com>"]
 readme = "README.md"

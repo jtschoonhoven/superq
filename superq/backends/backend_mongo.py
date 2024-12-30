@@ -5,11 +5,7 @@ except ImportError as e:
     raise ImportError('Install `pymongo` to use the superq Mongo backend: `pip install superq[pymongo]`') from e
 import logging
 import pickle
-import random
-import time
-from collections.abc import Iterator
-from contextlib import contextmanager
-from datetime import datetime, timedelta
+from datetime import datetime
 from typing import Any, Optional
 
 import pymongo.errors
@@ -18,7 +14,7 @@ from superq import tasks, workers, wrapped_fn
 from superq.backends import backend_base
 from superq.bson import ObjectId
 from superq.config import Config
-from superq.exceptions import BackendError, TaskImportError, TaskNotFoundError
+from superq.exceptions import TaskImportError, TaskNotFoundError
 
 log = logging.getLogger(__name__)
 
@@ -102,21 +98,6 @@ class MongoBackend(backend_base.BaseBackend):
 
         return self.deserialize_task(new_task_dict)
 
-    @contextmanager
-    def transation(self) -> Iterator[None]:
-        """
-        Context manager that starts a transaction and commits it on success, or aborts it on failure.
-        """
-        with self._client.start_session() as session:
-            session.start_transaction()
-            try:
-                yield
-            except Exception as e:
-                session.abort_transaction()
-                raise e
-            else:
-                session.commit_transaction()
-
     def claim_tasks(
         self,
         max_tasks: int,  # Ignored unless > 0
@@ -124,7 +105,6 @@ class MongoBackend(backend_base.BaseBackend):
         worker_host: str | None = None,
         worker_name: str | None = None,
         run_sync=False,
-        retry_delay=timedelta(seconds=1),
     ) -> list['tasks.Task']:
         """
         "Claim" tasks in Mongo by updating and returning them atomically.
@@ -132,81 +112,67 @@ class MongoBackend(backend_base.BaseBackend):
         """
         now = datetime.now()
 
-        # No need to hit the database if we're not claiming any tasks
-        if max_tasks <= 0:
+        query = {  # Fetch all incomplete tasks scheduled to run before now
+            'scheduled_for': {'$lte': now},
+            'status': {'$in': ['WAITING', 'RUNNING']},
+            'worker_type': worker_type,
+        }
+
+        task_dicts: list[dict[str, Any]] = list(
+            self.db.find(query, limit=max_tasks if max_tasks >= 1 else None).sort(
+                [
+                    ('priority', pymongo.ASCENDING),  # Sort first by priority (0 is higher than 1)
+                    ('scheduled_for', pymongo.ASCENDING),  # Sort by schedule, oldest-to-newest
+                    ('_id', pymongo.ASCENDING),  # Sort last by creation date, oldest-to-newest
+                ]
+            )
+        )
+
+        # Delete old transaction IDs from previous attempts (this should be a rare edge case)
+        task_dicts_with_transaction_ids = [t for t in task_dicts if '__transaction_id__' in t]
+        if task_dicts_with_transaction_ids:
+            query['_id'] = {'$in': [ObjectId(t['_id']) for t in task_dicts_with_transaction_ids]}
+            self.db.update_many(query, {'$unset': {'__transaction_id__': ''}})
+
+        # Get the IDs of the tasks we want to claim (or exit if there are no tasks to claim)
+        task_ids = [ObjectId(t['_id']) for t in task_dicts]
+        if not task_ids:
             return []
 
-        try:
-            # There's no way to update and return documents atomically in MongoDB, so we do 2 requests in a transaction
-            with self.transation():
-                task_dicts: list[dict[str, Any]] = list(
-                    self.db.find(
-                        {  # Fetch all incomplete tasks scheduled to run before now
-                            'scheduled_for': {'$lte': now},
-                            'status': {'$in': ['WAITING', 'RUNNING']},
-                            'worker_type': worker_type,
-                        },
-                        limit=max_tasks if max_tasks >= 1 else None,
-                    ).sort(
-                        [
-                            ('priority', pymongo.ASCENDING),  # Sort first by priority (0 is higher than 1)
-                            ('scheduled_for', pymongo.ASCENDING),  # Sort by schedule, oldest-to-newest
-                            ('_id', pymongo.ASCENDING),  # Sort last by creation date, oldest-to-newest
-                        ]
-                    )
-                )
+        # Generate a "transaction ID" that uniquely identifies this claim attempt (used to manage race conditions)
+        transaction_id = ObjectId()
+        mutation = {
+            'status': 'RUNNING',
+            'scheduled_for': now + self.cfg.task_timeout,
+            'started_at': now,
+            'updated_at': now,
+            'worker_host': worker_host,
+            'worker_name': worker_name,
+            '__transaction_id__': transaction_id,
+        }
 
-                # Get the IDs of the tasks we want to claim (or exit if there are no tasks to claim)
-                task_ids = [ObjectId(task_dict['_id']) for task_dict in task_dicts]
-                if not task_ids:
-                    return []
+        # Update the tasks to claim them
+        # Because we both set and match on __transaction_id__, two workers cannot claim the same task in a race:
+        # However, race conditions might cause this to return fewer tasks than requested (which is acceptable)
+        # https://www.mongodb.com/docs/manual/core/write-operations-atomicity/#multi-document-transactions
+        response = self.db.update_many(
+            {'_id': {'$in': task_ids}, '__transaction_id__': {'$exists': False}},
+            {'$set': mutation},
+        )
 
-                mutation = {
-                    'status': 'RUNNING',
-                    'scheduled_for': now + self.cfg.task_timeout,
-                    'started_at': now,
-                    'updated_at': now,
-                    'worker_host': worker_host,
-                    'worker_name': worker_name,
-                }
+        # Re-fetch the list of successfully-claimed tasks (if race conditions prevented us from claiming all of them)
+        # Successfully-claimed tasks will all have the same transaction ID
+        if response.modified_count != len(task_ids):
+            query = {'_id': {'$in': task_ids}, '__transaction_id__': transaction_id}
+            task_ids = [ObjectId(t['_id']) for t in self.db.find(query, projection={'_id': 1})]
+            task_dicts = [t for t in task_dicts if ObjectId(t['_id']) in task_ids]  # Use task_dict from before update
 
-                # Update the tasks to claim them
-                result = self.db.update_many(
-                    {'_id': {'$in': task_ids}},
-                    {'$set': mutation},
-                )
-
-                # Raise an exception to abort the transaction if we didn't claim all the tasks:
-                # This can happen when multiple workers try to claim the same task at the same time
-                if result.modified_count < len(task_ids):
-                    raise BackendError(
-                        f'Mongo backend `update_many` claimed fewer tasks ({result.modified_count}) '
-                        f'than expected ({len(task_ids)}): aborting transaction'
-                    )
-
-        # Handle retriable errors with some jittered delay and exponential backoff
-        except (BackendError, pymongo.errors.OperationFailure) as e:
-            retry_delay_ms = int(retry_delay.total_seconds() * 1000)
-            delay_seconds = random.randrange(0, retry_delay_ms) / 1000  # Add jitter to reduce the odds of collision
-
-            log.exception(f'Failed to claim {len(task_ids)} {worker_type} tasks, retrying in {delay_seconds:.2f}s: {e}')
-            time.sleep(random.randrange(0, retry_delay_ms) // 1000)
-
-            # Retry with exponential backoff
-            return self.claim_tasks(
-                max_tasks=max_tasks,
-                worker_type=worker_type,
-                worker_host=worker_host,
-                worker_name=worker_name,
-                retry_delay=retry_delay * 2,
-            )
-
-        mutation_without_status_and_started_at = {k: v for k, v in mutation.items() if k != 'status'}
+        mutation_without_status_or_started_at = {k: v for k, v in mutation.items() if k not in ('status', 'started_at')}
         claimed_tasks: list[tasks.Task] = []
 
         # Update and deserialize the claimed tasks and handle timeouts
         for task_dict in task_dicts:
-            task_dict.update(mutation_without_status_and_started_at)  # Manually apply the mutation
+            task_dict.update(mutation_without_status_or_started_at)  # Manually apply the mutation
             task = self.deserialize_task(task_dict)
 
             try:
@@ -254,11 +220,11 @@ class MongoBackend(backend_base.BaseBackend):
 
     def update(self, task: 'tasks.Task', *, fields: list[str]) -> None:
         """
-        Update a task in the queue.
+        Update a task in the queue. This also deletes the special `__transaction_id__` field if set.
         """
         task_dict = self.serialize_task(task)
         query = {'_id': task_dict.pop('_id')}
-        mutation = {'$set': {field: task_dict[field] for field in fields}}
+        mutation = {'$set': {field: task_dict[field] for field in fields}, '$unset': {'__transaction_id__': ''}}
         self.db.update_one(query, mutation)
 
     def concurrency(
