@@ -291,31 +291,55 @@ class ObjectId:
     def __eq__(self, other):
         if isinstance(other, ObjectId):
             return self.__id == other.binary
+        # MODIFICATION FOR SUPERQ: Inter-operability with bson ObjectIDs
+        elif hasattr(other, 'binary') and isinstance(other.binary, bytes) and len(other.binary) == 12:
+            return self.__id == other.binary
+        # END MODIFICATION FOR SUPERQ
         return NotImplemented
 
     def __ne__(self, other):
         if isinstance(other, ObjectId):
             return self.__id != other.binary
+        # MODIFICATION FOR SUPERQ: Inter-operability with bson ObjectIDs
+        elif hasattr(other, 'binary') and isinstance(other.binary, bytes) and len(other.binary) == 12:
+            return self.__id != other.binary
+        # END MODIFICATION FOR SUPERQ
         return NotImplemented
 
     def __lt__(self, other):
         if isinstance(other, ObjectId):
             return self.__id < other.binary
+        # MODIFICATION FOR SUPERQ: Inter-operability with bson ObjectIDs
+        elif hasattr(other, 'binary') and isinstance(other.binary, bytes) and len(other.binary) == 12:
+            return self.__id < other.binary
+        # END MODIFICATION FOR SUPERQ
         return NotImplemented
 
     def __le__(self, other):
         if isinstance(other, ObjectId):
             return self.__id <= other.binary
+        # MODIFICATION FOR SUPERQ: Inter-operability with bson ObjectIDs
+        elif hasattr(other, 'binary') and isinstance(other.binary, bytes) and len(other.binary) == 12:
+            return self.__id <= other.binary
+        # END MODIFICATION FOR SUPERQ
         return NotImplemented
 
     def __gt__(self, other):
         if isinstance(other, ObjectId):
             return self.__id > other.binary
+        # MODIFICATION FOR SUPERQ: Inter-operability with bson ObjectIDs
+        elif hasattr(other, 'binary') and isinstance(other.binary, bytes) and len(other.binary) == 12:
+            return self.__id > other.binary
+        # END MODIFICATION FOR SUPERQ
         return NotImplemented
 
     def __ge__(self, other):
         if isinstance(other, ObjectId):
             return self.__id >= other.binary
+        # MODIFICATION FOR SUPERQ: Inter-operability with bson ObjectIDs
+        elif hasattr(other, 'binary') and isinstance(other.binary, bytes) and len(other.binary) == 12:
+            return self.__id >= other.binary
+        # END MODIFICATION FOR SUPERQ
         return NotImplemented
 
     def __hash__(self):
